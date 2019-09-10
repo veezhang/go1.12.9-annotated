@@ -107,6 +107,7 @@ var runtimeInitTime int64
 var initSigmask sigset
 
 // The main goroutine.
+// 【main goroutine， 也就是runtime·mainPC】
 func main() {
 	g := getg()
 
@@ -117,6 +118,7 @@ func main() {
 	// Max stack size is 1 GB on 64-bit, 250 MB on 32-bit.
 	// Using decimal instead of binary GB and MB because
 	// they look nicer in the stack overflow failure message.
+	//【执行栈的最大限制： 1GB on 64-bit， 250 MB on 32-bit】
 	if sys.PtrSize == 8 {
 		maxstacksize = 1000000000
 	} else {
@@ -124,9 +126,12 @@ func main() {
 	}
 
 	// Allow newproc to start new Ms.
+	//【标示main goroutine启动了， 接下来允许创建行的goroutine】
 	mainStarted = true
 
+	//【wasm下面没有线程， 因此不需要sysmon】
 	if GOARCH != "wasm" { // no threads on wasm yet, so no sysmon
+		//【启动系统后台监控 (定期 gc，以及并发任务调度相关信息)】
 		systemstack(func() {
 			newm(sysmon, nil)
 		})
@@ -138,12 +143,14 @@ func main() {
 	// Those can arrange for main.main to run in the main thread
 	// by calling runtime.LockOSThread during initialization
 	// to preserve the lock.
+	//【在初始化期间， 将main goroutine锁定到main OS thread】
 	lockOSThread()
 
 	if g.m != &m0 {
 		throw("runtime.main not on m0")
 	}
 
+	//【执行初始化】
 	runtime_init() // must be before defer
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
@@ -160,6 +167,7 @@ func main() {
 	// Record when the world started.
 	runtimeInitTime = nanotime()
 
+	//【启动gc】
 	gcenable()
 
 	main_init_done = make(chan bool)
@@ -184,6 +192,8 @@ func main() {
 		cgocall(_cgo_notify_runtime_init_done, nil)
 	}
 
+	//【进行间接调用，因为链接器在放置运行时不知道主包的地址】
+	//【执行main_init】
 	fn := main_init // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
 	fn()
 	close(main_init_done)
@@ -196,6 +206,7 @@ func main() {
 		// has a main, but it is not executed.
 		return
 	}
+	//【执行main_main（用户逻辑入口）】
 	fn = main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
 	fn()
 	if raceenabled {
@@ -206,6 +217,7 @@ func main() {
 	// another goroutine at the same time as main returns,
 	// let the other goroutine finish printing the panic trace.
 	// Once it does, it will exit. See issues 3934 and 20018.
+	//【当main goroutine退出， 其他的goroutine发生panic的时候， 让其打印panic trace】
 	if atomic.Load(&runningPanicDefers) != 0 {
 		// Running deferred functions should not take long.
 		for c := 0; c < 1000; c++ {
@@ -219,6 +231,7 @@ func main() {
 		gopark(nil, nil, waitReasonPanicWait, traceEvGoStop, 1)
 	}
 
+	//【执行完成，退出】
 	exit(0)
 	for {
 		var x *int32
@@ -523,36 +536,41 @@ func cpuinit() {
 //	call runtime·mstart
 //
 // The new G calls runtime·main.
+// 初始化sched, 核心部分
 func schedinit() {
 	// raceinit must be the first call to race detector.
 	// In particular, it must be done before mallocinit below calls racemapshadow.
+	//【调用 raceinit 必须是 首次对 race 检测器的调用，特别是：必须在 调用 mallocinit 函数之前，在 racemapshadow函数之后调用】
+	//【获取当前 G】
 	_g_ := getg()
 	if raceenabled {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
 
+	//【最大的M数量限制】
 	sched.maxmcount = 10000
 
-	tracebackinit()
-	moduledataverify()
-	stackinit()
-	mallocinit()
-	mcommoninit(_g_.m)
-	cpuinit()       // must run before alginit
-	alginit()       // maps must not be used before this call
-	modulesinit()   // provides activeModules
-	typelinksinit() // uses maps, activeModules
-	itabsinit()     // uses activeModules
+	tracebackinit()    //【初始化函数栈】
+	moduledataverify() //【函数负责检查链接器符号，以确保所有结构体的正确性】
+	stackinit()        //【堆栈初始化】
+	mallocinit()       //【内存初始化】
+	mcommoninit(_g_.m) //【M初始化】
+	cpuinit()          // must run before alginit
+	alginit()          // maps must not be used before this call
+	modulesinit()      // provides activeModules
+	typelinksinit()    // uses maps, activeModules
+	itabsinit()        // uses activeModules
 
-	msigsave(_g_.m)
+	msigsave(_g_.m) //【设置signal mask】
 	initSigmask = _g_.m.sigmask
 
-	goargs()
-	goenvs()
-	parsedebugvars()
-	gcinit()
+	goargs()         //【初始化参数】
+	goenvs()         //【初始化环境变量】
+	parsedebugvars() //【初始化debug参数】
+	gcinit()         //【gc初始化】
 
 	sched.lastpoll = uint64(nanotime())
+	//【设置procs， 根据cpu核数和环境变量GOMAXPROCS， 优先环境变量】
 	procs := ncpu
 	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
 		procs = n
@@ -1150,6 +1168,8 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 //
 //go:nosplit
 //go:nowritebarrierrec
+//【启动M】
+//【不能用分段栈, 不允许write barriers】
 func mstart() {
 	_g_ := getg()
 
@@ -3236,6 +3256,9 @@ func malg(stacksize int32) *g {
 // are available sequentially after &fn; they would not be
 // copied if a stack split occurred.
 //go:nosplit
+//【创建G运行fn, 参数大小为siz】
+//【把G放到等待队列】
+//【这个函数不能用分段栈，假定在fn后还能访问到参数】
 func newproc(siz int32, fn *funcval) {
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
 	gp := getg()

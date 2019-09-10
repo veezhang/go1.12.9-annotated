@@ -11,10 +11,11 @@
 // internal linking. This is the entry point for the program from the
 // kernel for an ordinary -buildmode=exe program. The stack holds the
 // number of arguments and the C-style argv.
+// 【_rt0_amd64是大多数amd64系统通常的启用代码， 堆栈参数是c风格的】
 TEXT _rt0_amd64(SB),NOSPLIT,$-8
-	MOVQ	0(SP), DI	// argc
-	LEAQ	8(SP), SI	// argv
-	JMP	runtime·rt0_go(SB)
+	MOVQ	0(SP), DI	// argc		// 【设置参数argc】
+	LEAQ	8(SP), SI	// argv		// 【设置参数argv】
+	JMP	runtime·rt0_go(SB)			// 【跳转到runtime·rt0_go】
 
 // main is common startup code for most amd64 systems when using
 // external linking. The C startup code will call the symbol "main"
@@ -86,8 +87,10 @@ GLOBL _rt0_amd64_lib_argv<>(SB),NOPTR, $8
 
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// copy arguments forward on an even stack
-	MOVQ	DI, AX		// argc
-	MOVQ	SI, BX		// argv
+	//【此处将 SP -= 39，然后按照 16 字节对齐，此时栈上至少有 39 字节可用。】
+	//【然后将 argc 和 argv 复制到 SP+16 和 SP+24 的位置。】
+	MOVQ	DI, AX		// argc		//【获取之前设置的argc参数】
+	MOVQ	SI, BX		// argv		//【获取之前设置的argv参数】
 	SUBQ	$(4*8+7), SP		// 2args 2auto
 	ANDQ	$~15, SP
 	MOVQ	AX, 16(SP)
@@ -95,12 +98,14 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
-	MOVQ	$runtime·g0(SB), DI
-	LEAQ	(-64*1024+104)(SP), BX
-	MOVQ	BX, g_stackguard0(DI)
-	MOVQ	BX, g_stackguard1(DI)
-	MOVQ	BX, (g_stack+stack_lo)(DI)
-	MOVQ	SP, (g_stack+stack_hi)(DI)
+	//【runtime.g0 位于 runtime/proc.go#81】
+	//【初始化 g0，g0 的栈实际上就是 linux 分配的栈，大约 64k。】
+	MOVQ	$runtime·g0(SB), DI					//【CX=runtime·g0】
+	LEAQ	(-64*1024+104)(SP), BX				//【BX=SP-64*1024+104】
+	MOVQ	BX, g_stackguard0(DI)				//【g0.stackguard0=SP-64*1024+104】
+	MOVQ	BX, g_stackguard1(DI)				//【g0.stackguard1=g0.stackguard0】
+	MOVQ	BX, (g_stack+stack_lo)(DI)			//【g0.stack.lo = g0.stackguard0】
+	MOVQ	SP, (g_stack+stack_hi)(DI)			//【g0.stack.hi=SP】
 
 	// find out information about the processor we're on
 	MOVL	$0, AX
@@ -129,15 +134,18 @@ notintel:
 
 nocpuinfo:
 	// if there is an _cgo_init, call it.
+	//【如果有_cgo_init，就执行】
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX
 	JZ	needtls
 	// g0 already in DI
+	//【这里的 DI 就是上面初始化 g0 时设置的 g0 的地址】
 	MOVQ	DI, CX	// Win64 uses CX for first parameter
 	MOVQ	$setg_gcc<>(SB), SI
 	CALL	AX
 
 	// update stackguard after _cgo_init
+	//【重新设置stackguard】
 	MOVQ	$runtime·g0(SB), CX
 	MOVQ	(g_stack+stack_lo)(CX), AX
 	ADDQ	$const__StackGuard, AX
@@ -161,10 +169,15 @@ needtls:
 	JMP ok
 #endif
 
-	LEAQ	runtime·m0+m_tls(SB), DI
-	CALL	runtime·settls(SB)
+	// 【设置tls， Thread Local Storage】
+	LEAQ	runtime·m0+m_tls(SB), DI		//【DI=m0.tls】
+	CALL	runtime·settls(SB)				//【调用runtime·settls】
 
 	// store through it, to make sure it works
+	//【get_tls 和 g 是宏，位于 runtime/go_tls.h】
+	//【#define	get_tls(r)	MOVQ TLS, r】
+	//【#define	g(r)	0(r)(TLS*1)】
+	//【此处对 tls 进行了一次测试，确保值正确写入了 m0.tls】
 	get_tls(BX)
 	MOVQ	$0x123, g(BX)
 	MOVQ	runtime·m0+m_tls(SB), AX
@@ -173,37 +186,40 @@ needtls:
 	CALL	runtime·abort(SB)
 ok:
 	// set the per-goroutine and per-mach "registers"
-	get_tls(BX)
-	LEAQ	runtime·g0(SB), CX
-	MOVQ	CX, g(BX)
-	LEAQ	runtime·m0(SB), AX
+	//【将 g0 放到 tls 里，这里实际上就是 m0.tls】
+	get_tls(BX)								//【等价于 MOVQ TLS, BX， 从 TLS 起始移动 8 byte 值到 CX 寄存器】
+	LEAQ	runtime·g0(SB), CX				//【CX=g0】
+	MOVQ	CX, g(BX)						//【等价于 MOVQ CX， 0(BX)(TLS*1),  把g0存到TLS】
+	LEAQ	runtime·m0(SB), AX				//【AX=m0】
 
 	// save m->g0 = g0
-	MOVQ	CX, m_g0(AX)
+	MOVQ	CX, m_g0(AX)			//【m0.g0 = g0】
 	// save m0 to g0->m
-	MOVQ	AX, g_m(CX)
+	MOVQ	AX, g_m(CX)				//【g0.m = m0】
 
 	CLD				// convention is D is always left cleared
+	//【这个函数检查了各种类型以及类型转换是否有问题】
 	CALL	runtime·check(SB)
 
 	MOVL	16(SP), AX		// copy argc
 	MOVL	AX, 0(SP)
 	MOVQ	24(SP), AX		// copy argv
 	MOVQ	AX, 8(SP)
-	CALL	runtime·args(SB)
-	CALL	runtime·osinit(SB)
-	CALL	runtime·schedinit(SB)
+	CALL	runtime·args(SB)		//【设置参数】
+	CALL	runtime·osinit(SB)		//【初始化os】
+	CALL	runtime·schedinit(SB)	//【初始化sched】
 
 	// create a new goroutine to start program
+	//【创建goroutine并加入到等待队列，该goroutine执行runtime.mainPC所指向的函数】
 	MOVQ	$runtime·mainPC(SB), AX		// entry
 	PUSHQ	AX
 	PUSHQ	$0			// arg size
-	CALL	runtime·newproc(SB)
+	CALL	runtime·newproc(SB)			//【调用runtime·newproc】
 	POPQ	AX
 	POPQ	AX
 
 	// start this M
-	CALL	runtime·mstart(SB)
+	CALL	runtime·mstart(SB)			//【启动调度程序，调度到刚刚创建的goroutine执行】
 
 	CALL	runtime·abort(SB)	// mstart should never return
 	RET
@@ -213,6 +229,7 @@ ok:
 	MOVQ	$runtime·debugCallV1(SB), AX
 	RET
 
+//【声明全局的变量mainPC为runtime.main函数的地址，该变量为read only】
 DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8
 

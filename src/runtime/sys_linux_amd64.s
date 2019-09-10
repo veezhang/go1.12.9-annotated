@@ -603,6 +603,8 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	RET
 
 // set tls base to DI
+//【设置tls】
+//【调用了一个系统函数arch_prctl(ARCH_SET_FS), 而这个系统调用其实是设置FS段寄存器的基址，也就是runtime.tls0。】
 TEXT runtime·settls(SB),NOSPLIT,$32
 #ifdef GOOS_android
 	// Same as in sys_darwin_386.s:/ugliness, different constant.

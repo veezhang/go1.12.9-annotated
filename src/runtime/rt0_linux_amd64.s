@@ -4,6 +4,7 @@
 
 #include "textflag.h"
 
+// 【linux amd64系统的启动函数】
 TEXT _rt0_amd64_linux(SB),NOSPLIT,$-8
 	JMP	_rt0_amd64(SB)
 

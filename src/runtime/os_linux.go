@@ -274,6 +274,7 @@ func sysauxv(auxv []uintptr) int {
 	return i / 2
 }
 
+//【初始化os， 根据不同的平台也不一样】
 func osinit() {
 	ncpu = getproccount()
 }
