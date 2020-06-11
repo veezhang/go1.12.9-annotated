@@ -12,15 +12,18 @@ import (
 )
 
 // This implementation depends on OS-specific implementations of
+// 此实现取决于特定于OS的实现
 //
 //	futexsleep(addr *uint32, val uint32, ns int64)
 //		Atomically,
 //			if *addr == val { sleep }
 //		Might be woken up spuriously; that's allowed.
 //		Don't sleep longer than ns; ns < 0 means forever.
+// 	可能被虚假唤醒； 那是允许的。不要睡超过ns的时间；ns <0表示永远。
 //
 //	futexwakeup(addr *uint32, cnt uint32)
 //		If any procs are sleeping on addr, wake up at most cnt.
+// 	如果任何proc都在addr上休眠，则最多唤醒cnt。
 
 const (
 	mutex_unlocked = 0
@@ -36,8 +39,11 @@ const (
 // mutex_sleeping means that there is presumably at least one sleeping thread.
 // Note that there can be spinning threads during all states - they do not
 // affect mutex's state.
+// 可能的锁状态是：mutex_unlocked, mutex_locked, mutex_sleeping。
+// mutex_sleeping意味着至少有一个睡眠线程。请注意，在所有状态下都可能有自旋(spinning)线程-它们不影响互斥状态。
 
 // We use the uintptr mutex.key and note.key as a uint32.
+// mutex.key 和 note.key转换成uint32。mutex和note在runtime2.go中，都是一个key uintptr成员。
 //go:nosplit
 func key32(p *uintptr) *uint32 {
 	return (*uint32)(unsafe.Pointer(p))

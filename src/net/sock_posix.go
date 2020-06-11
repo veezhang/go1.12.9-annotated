@@ -15,7 +15,9 @@ import (
 
 // socket returns a network file descriptor that is ready for
 // asynchronous I/O using the network poller.
+// socket 返回一个网络文件描述符，该描述符已准备好使用 network poller 进行异步 I/O 。返回的是 netFD 结构
 func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only bool, laddr, raddr sockaddr, ctrlFn func(string, string, syscall.RawConn) error) (fd *netFD, err error) {
+	// socket 系统调用，syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC
 	s, err := sysSocket(family, sotype, proto)
 	if err != nil {
 		return nil, err
@@ -24,6 +26,7 @@ func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only
 		poll.CloseFunc(s)
 		return nil, err
 	}
+	// 创建 netFD 网络文件描述符
 	if fd, err = newFD(s, family, sotype, net); err != nil {
 		poll.CloseFunc(s)
 		return nil, err
@@ -54,12 +57,14 @@ func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only
 	if laddr != nil && raddr == nil {
 		switch sotype {
 		case syscall.SOCK_STREAM, syscall.SOCK_SEQPACKET:
+			// 监听数据流
 			if err := fd.listenStream(laddr, listenerBacklog(), ctrlFn); err != nil {
 				fd.Close()
 				return nil, err
 			}
 			return fd, nil
 		case syscall.SOCK_DGRAM:
+			//  监听数据报
 			if err := fd.listenDatagram(laddr, ctrlFn); err != nil {
 				fd.Close()
 				return nil, err
@@ -67,6 +72,7 @@ func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only
 			return fd, nil
 		}
 	}
+	// 进行拨号
 	if err := fd.dial(ctx, laddr, raddr, ctrlFn); err != nil {
 		fd.Close()
 		return nil, err
@@ -172,6 +178,7 @@ func (fd *netFD) dial(ctx context.Context, laddr, raddr sockaddr, ctrlFn func(st
 	return nil
 }
 
+// 监听数据流
 func (fd *netFD) listenStream(laddr sockaddr, backlog int, ctrlFn func(string, string, syscall.RawConn) error) error {
 	var err error
 	if err = setDefaultListenerSockopts(fd.pfd.Sysfd); err != nil {
@@ -181,21 +188,26 @@ func (fd *netFD) listenStream(laddr sockaddr, backlog int, ctrlFn func(string, s
 	if lsa, err = laddr.sockaddr(fd.family); err != nil {
 		return err
 	}
+	// src/net/dial.go 中 Dialer 或 ListenConfig 中的 Control 函数， 默认是 nil
 	if ctrlFn != nil {
 		c, err := newRawConn(fd)
 		if err != nil {
 			return err
 		}
+		// 调用 ctrlFn 函数
 		if err := ctrlFn(fd.ctrlNetwork(), laddr.String(), c); err != nil {
 			return err
 		}
 	}
+	// 调用系统函数 bind
 	if err = syscall.Bind(fd.pfd.Sysfd, lsa); err != nil {
 		return os.NewSyscallError("bind", err)
 	}
+	// 调用系统函数 listen
 	if err = listenFunc(fd.pfd.Sysfd, backlog); err != nil {
 		return os.NewSyscallError("listen", err)
 	}
+	// fd 初始化
 	if err = fd.init(); err != nil {
 		return err
 	}
@@ -204,6 +216,7 @@ func (fd *netFD) listenStream(laddr sockaddr, backlog int, ctrlFn func(string, s
 	return nil
 }
 
+// 监听数据报
 func (fd *netFD) listenDatagram(laddr sockaddr, ctrlFn func(string, string, syscall.RawConn) error) error {
 	switch addr := laddr.(type) {
 	case *UDPAddr:

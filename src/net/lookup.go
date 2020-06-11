@@ -149,7 +149,7 @@ type Resolver struct {
 	// lookupGroup merges LookupIPAddr calls together for lookups for the same
 	// host. The lookupGroup key is the LookupIPAddr.host argument.
 	// The return values are ([]IPAddr, error).
-	lookupGroup singleflight.Group
+	lookupGroup singleflight.Group // 单航模式
 
 	// TODO(bradfitz): optional interface impl override hook
 	// TODO(bradfitz): Timeout time.Duration?
@@ -228,21 +228,26 @@ func (ovc *onlyValuesCtx) Value(key interface{}) interface{} {
 // for its values, otherwise it is never canceled and has no deadline.
 // If the lookup context expires, any looked up values will return nil.
 // See Issue 28600.
+// withUnexpiredValuesPreserved 返回一个 context.Context 仅使用 lookupCtx 作为其值，否则它将永远不会被取消并且没有截止日期。
+// 如果查找上下文过期，则所有查找值将返回 nil 。
 func withUnexpiredValuesPreserved(lookupCtx context.Context) context.Context {
 	return &onlyValuesCtx{Context: context.Background(), lookupValues: lookupCtx}
 }
 
 // lookupIPAddr looks up host using the local resolver and particular network.
 // It returns a slice of that host's IPv4 and IPv6 addresses.
+// lookupIPAddr 使用本地解析器和特定网络查找主机。 它返回该主机的 IPv4 和 IPv6 地址切片。
 func (r *Resolver) lookupIPAddr(ctx context.Context, network, host string) ([]IPAddr, error) {
 	// Make sure that no matter what we do later, host=="" is rejected.
 	// parseIP, for example, does accept empty strings.
 	if host == "" {
 		return nil, &DNSError{Err: errNoSuchHost.Error(), Name: host}
 	}
+	// 解析 IP 地址
 	if ip, zone := parseIPZone(host); ip != nil {
 		return []IPAddr{{IP: ip, Zone: zone}}, nil
 	}
+	// trace 相关
 	trace, _ := ctx.Value(nettrace.TraceKey{}).(*nettrace.Trace)
 	if trace != nil && trace.DNSStart != nil {
 		trace.DNSStart(host)
@@ -250,6 +255,7 @@ func (r *Resolver) lookupIPAddr(ctx context.Context, network, host string) ([]IP
 	// The underlying resolver func is lookupIP by default but it
 	// can be overridden by tests. This is needed by net/http, so it
 	// uses a context key instead of unexported variables.
+	// 底层解析器功能默认为 lookupIP ，但可以被测试覆盖。 net/http 需要此属性，因此它使用 context key 而不是未导出的变量。
 	resolverFunc := r.lookupIP
 	if alt, _ := ctx.Value(nettrace.LookupIPAltResolverKey{}).(func(context.Context, string, string) ([]IPAddr, error)); alt != nil {
 		resolverFunc = alt
@@ -260,10 +266,14 @@ func (r *Resolver) lookupIPAddr(ctx context.Context, network, host string) ([]IP
 	// canceled it might cause an error to be returned to a lookup
 	// using a completely different context. However we need to preserve
 	// only the values in context. See Issue 28600.
+	// 我们不希望 ctx 的取消会影响 lookupGroup 操作。 否则，如果我们的 context 被取消，则使用完全不同的 context 来 loopup 可能导致将错误返回。
+	// 然而，我们只需要保 context 中的值。 请参阅问题28600。
 	lookupGroupCtx, lookupGroupCancel := context.WithCancel(withUnexpiredValuesPreserved(ctx))
 
+	// 开始 DNS 解析
 	lookupKey := network + "\000" + host
 	dnsWaitGroup.Add(1)
+	// 单航模式，最终执行 resolverFunc
 	ch, called := r.getLookupGroup().DoChan(lookupKey, func() (interface{}, error) {
 		defer dnsWaitGroup.Done()
 		return testHookLookupIP(lookupGroupCtx, resolverFunc, network, host)
@@ -281,6 +291,8 @@ func (r *Resolver) lookupIPAddr(ctx context.Context, network, host string) ([]IP
 		// let the lookup continue uncanceled, and let later
 		// lookups with the same key share the result.
 		// See issues 8602, 20703, 22724.
+		// 我们的 context 被取消了。 如果我们是唯一使用 lookupKey 查找的 goroutine，请从 lookupGroup 中删除该 lookupKey 并取消查找。
+		// 如果还有其他 goroutines 查找 lookupKey ，则让查找继续取消，并让以后的查找共享结果。
 		if r.getLookupGroup().ForgetUnshared(lookupKey) {
 			lookupGroupCancel()
 		} else {
@@ -294,7 +306,7 @@ func (r *Resolver) lookupIPAddr(ctx context.Context, network, host string) ([]IP
 			trace.DNSDone(nil, false, err)
 		}
 		return nil, err
-	case r := <-ch:
+	case r := <-ch: // resolverFunc 解析到了
 		lookupGroupCancel()
 		if trace != nil && trace.DNSDone != nil {
 			addrs, _ := r.Val.([]IPAddr)
@@ -306,6 +318,7 @@ func (r *Resolver) lookupIPAddr(ctx context.Context, network, host string) ([]IP
 
 // lookupIPReturn turns the return values from singleflight.Do into
 // the return values from LookupIP.
+// lookupIPReturn 将 singleflight.Do 的返回值转换为 LookupIP 的返回值。
 func lookupIPReturn(addrsi interface{}, err error, shared bool) ([]IPAddr, error) {
 	if err != nil {
 		return nil, err
@@ -334,6 +347,7 @@ func LookupPort(network, service string) (port int, err error) {
 }
 
 // LookupPort looks up the port for the given network and service.
+// LookupPort 查找给定网络和服务的端口。 如果不是整数，则根据 /etc/services 来处理
 func (r *Resolver) LookupPort(ctx context.Context, network, service string) (port int, err error) {
 	port, needsLookup := parsePort(service)
 	if needsLookup {
@@ -349,6 +363,7 @@ func (r *Resolver) LookupPort(ctx context.Context, network, service string) (por
 			return 0, err
 		}
 	}
+	// 端口范围
 	if 0 > port || port > 65535 {
 		return 0, &AddrError{Err: "invalid port", Addr: service}
 	}

@@ -23,6 +23,9 @@ import (
 // the IPv6 interface. That simplifies our code and is most
 // general. Unfortunately, we need to run on kernels built without
 // IPv6 support too. So probe the kernel to figure it out.
+//
+// 初始化 var ipStackCaps ipStackCapabilities ，是否支持 IPv4 ，是否支持 IPv6 ，是否支持 Ipv4 地址映射到 IPv6 地址内
+// 单例调用此函数
 func (p *ipStackCapabilities) probe() {
 	s, err := sysSocket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)
 	switch err {
@@ -108,6 +111,8 @@ func (p *ipStackCapabilities) probe() {
 // Note that the latest DragonFly BSD and OpenBSD kernels allow
 // neither "net.inet6.ip6.v6only=1" change nor IPPROTO_IPV6 level
 // IPV6_V6ONLY socket option setting.
+//
+// favoriteAddrFamily 返回合适的地址族（AF_INET，AF_INET6）
 func favoriteAddrFamily(network string, laddr, raddr sockaddr, mode string) (family int, ipv6only bool) {
 	switch network[len(network)-1] {
 	case '4':
@@ -116,7 +121,9 @@ func favoriteAddrFamily(network string, laddr, raddr sockaddr, mode string) (fam
 		return syscall.AF_INET6, true
 	}
 
+	// 监听模式下，并且本有指定本地地址
 	if mode == "listen" && (laddr == nil || laddr.isWildcard()) {
+		// 支持 Ipv4 地址映射到 IPv6 地址内 或者 不支持 IPv4 ，则使用 AF_INET6
 		if supportsIPv4map() || !supportsIPv4() {
 			return syscall.AF_INET6, false
 		}
@@ -133,14 +140,35 @@ func favoriteAddrFamily(network string, laddr, raddr sockaddr, mode string) (fam
 	return syscall.AF_INET6, false
 }
 
+// internetSocket 创建网络 socket
+// internetSocket -> socket(src/net/sock_posix.go 中函数，不是系统调用) -> {
+// 		sysSocket -> socketFunc -> syscall.Socket -> socket(src/syscall/zsyscall_linux_amd64.go 中函数，不是系统调用) -> RawSyscall(SYS_SOCKET,...) 系统调用，设置 SOCK_NONBLOCK 和 SOCK_CLOEXEC
+// 		fd = newFD
+// 		fd.listenStream -> setsockopt 系统调用 ， 设置 SO_REUSEADDR
+// 						-> syscall.Bind -> bind 系统调用
+// 						-> listen -> listen 系统调用
+// 						-> fd.init() -> fd.pfd.Init(fd.net, true) [pfd: poll.FD] -> fd.pd.init(fd) [pd: poll.pollDesc] -> runtime_pollServerInit -> netpollinit -> epollcreate
+// 																													   -> runtime_pollOpen -> netpollopen -> epollctl(... _EPOLL_CTL_ADD ...), ev.data = pd(这里保存了pollDesc信息，唤醒的时候通过这个来唤醒 G )
+//		fd.listenDatagram -> setsockopt 系统调用 ， 设置 SO_REUSEADDR
+// 						-> syscall.Bind -> bind 系统调用
+// 						-> listen -> listen 系统调用
+// 						-> fd.init() ...
+//		fd.dial			-> if laddr != nil syscall.Bind -> bind 系统调用
+// 						-> if raddr != nil connect -> listen 系统调用、
+//													-> fd.pfd.Init
+// 						-> if raddr == nil fd.init() ...
+// }
 func internetSocket(ctx context.Context, net string, laddr, raddr sockaddr, sotype, proto int, mode string, ctrlFn func(string, string, syscall.RawConn) error) (fd *netFD, err error) {
+	// 如果是通配地址（0.0.0.0,::）拨号，则将 raddr 改成本地地址
 	if (runtime.GOOS == "aix" || runtime.GOOS == "windows" || runtime.GOOS == "openbsd" || runtime.GOOS == "nacl") && mode == "dial" && raddr.isWildcard() {
 		raddr = raddr.toLocal(net)
 	}
 	family, ipv6only := favoriteAddrFamily(net, laddr, raddr, mode)
+	// 调用 socket(src/net/sock_posix.go 中函数，不是系统调用) 创建网络 socket
 	return socket(ctx, net, family, sotype, proto, ipv6only, laddr, raddr, ctrlFn)
 }
 
+// IP 地址转 syscall.Sockaddr
 func ipToSockaddr(family int, ip IP, port int, zone string) (syscall.Sockaddr, error) {
 	switch family {
 	case syscall.AF_INET:

@@ -168,11 +168,13 @@ func isSweepDone() bool {
 }
 
 // Returns only when span s has been swept.
+// span扫过了之后才返回
 //go:nowritebarrier
 func (s *mspan) ensureSwept() {
 	// Caller must disable preemption.
 	// Otherwise when this function returns the span can become unswept again
 	// (if GC is triggered on another goroutine).
+	// 调用者必须禁止抢占。否则当这个函数返回的时候，这个span可能重新变成没有扫过（如果在另一个goroutine上触发了GC）。
 	_g_ := getg()
 	if _g_.m.locks == 0 && _g_.m.mallocing == 0 && _g_ != _g_.m.g0 {
 		throw("mspan.ensureSwept: m is not locked")
@@ -180,6 +182,7 @@ func (s *mspan) ensureSwept() {
 
 	sg := mheap_.sweepgen
 	spangen := atomic.Load(&s.sweepgen)
+	// 
 	if spangen == sg || spangen == sg+3 {
 		return
 	}
@@ -204,6 +207,8 @@ func (s *mspan) ensureSwept() {
 // If preserve=true, don't return it to heap nor relink in mcentral lists;
 // caller takes care of it.
 //TODO go:nowritebarrier
+// 清除或收集标记阶段未标记的span。它清除标记位，为下一个GC回合做准备。如果span已返回堆，则返回true。
+// 如果preserve(保留) = true，则不要将其返回堆，也不要在mcentral列表中重新链接；调用者服务处理。
 func (s *mspan) sweep(preserve bool) bool {
 	// It's critical that we enter this function with preemption disabled,
 	// GC must not start while we are in the middle of this function.

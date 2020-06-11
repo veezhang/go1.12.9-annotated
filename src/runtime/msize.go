@@ -3,13 +3,14 @@
 // license that can be found in the LICENSE file.
 
 // Malloc small size classes.
-//
+// 分配小的大小类
 // See malloc.go for overview.
 // See also mksizeclasses.go for how we decide what size classes to use.
 
 package runtime
 
 // Returns size of the memory block that mallocgc will allocate if you ask for the size.
+// 如果需要，返回mallocgc将分配的内存块的大小。
 func roundupsize(size uintptr) uintptr {
 	if size < _MaxSmallSize {
 		if size <= smallSizeMax-8 {

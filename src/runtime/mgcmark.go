@@ -360,6 +360,7 @@ func markrootSpans(gcw *gcWork, shard int) {
 // gp must be the calling user gorountine.
 //
 // This must be called with preemption enabled.
+// gcAssistAlloc执行GC工作以使gp的辅助债务为正。gp必须是正在调用的用户gorountine。gp必须在启用抢占的情况下调用它。
 func gcAssistAlloc(gp *g) {
 	// Don't assist in non-preemptible contexts. These are
 	// generally fragile and won't allow the assist to block.
@@ -1183,6 +1184,7 @@ func scanobject(b uintptr, gcw *gcWork) {
 // Shade the object if it isn't already.
 // The object is not nil and known to be in the heap.
 // Preemption must be disabled.
+// 遮蔽（设置为灰色）对象（如果还没有）。对象不是nil并且已知位于堆中。必须禁用抢占功能。
 //go:nowritebarrier
 func shade(b uintptr) {
 	if obj, span, objIndex := findObject(b, 0, 0); obj != 0 {

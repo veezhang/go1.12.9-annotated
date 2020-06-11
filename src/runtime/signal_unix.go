@@ -74,20 +74,26 @@ var signalsOK bool
 
 // Initialize signals.
 // Called by libpreinit so runtime may not be initialized.
+// 初始化信号。由 libpreinit 调用，因此 runtime 可能没有初始化。
+// libpreinit 是c-archive/c-shared会调用的，会执行： initsig(true) 
 //go:nosplit
 //go:nowritebarrierrec
 func initsig(preinit bool) {
 	if !preinit {
 		// It's now OK for signal handlers to run.
+		// 已经提前初始化过了，所以 signal handler 可以直接运行
 		signalsOK = true
 	}
 
 	// For c-archive/c-shared this is called by libpreinit with
 	// preinit == true.
+	// 对于 c-archive/c-shared ，这由libpreinit调用，其中 preinit == true。
+	// 静态库/动态库直接返回
 	if (isarchive || islibrary) && !preinit {
 		return
 	}
 
+	// 遍历所有的信号掩码
 	for i := uint32(0); i < _NSIG; i++ {
 		t := &sigtable[i]
 		if t.flags == 0 || t.flags&_SigDefault != 0 {
@@ -96,15 +102,18 @@ func initsig(preinit bool) {
 
 		// We don't need to use atomic operations here because
 		// there shouldn't be any other goroutines running yet.
+		// 此时不需要原子操作，因为此时没有其他运行的 goroutine
 		fwdSig[i] = getsig(i)
 
 		if !sigInstallGoHandler(i) {
 			// Even if we are not installing a signal handler,
 			// set SA_ONSTACK if necessary.
+			// 即使我们没有设置信号处理程序，也可以根据需要设置 SA_ONSTACK 。SA_ONSTACK 表示使用一个备用信号栈。
+			// _SIG_DFL : 默认信号处理；_SIG_IGN ： 忽略信号处理。
 			if fwdSig[i] != _SIG_DFL && fwdSig[i] != _SIG_IGN {
-				setsigstack(i)
+				setsigstack(i) // 设置备用信号处理，加上 _SA_ONSTACK 标记。
 			} else if fwdSig[i] == _SIG_IGN {
-				sigInitIgnored(i)
+				sigInitIgnored(i) // 忽略信号，sig.ignored 用 bit 表示是否忽略
 			}
 			continue
 		}
@@ -253,14 +262,18 @@ func setProcessCPUProfiler(hz int32) {
 
 // setThreadCPUProfiler makes any thread-specific changes required to
 // implement profiling at a rate of hz.
+//  setThreadCPUProfiler 以 hz 的速率进行实现分析所需的任何特定于线程的更改。
 func setThreadCPUProfiler(hz int32) {
 	var it itimerval
 	if hz == 0 {
-		setitimer(_ITIMER_PROF, &it, nil)
+		setitimer(_ITIMER_PROF, &it, nil) // 清除计时器
 	} else {
+		//  it.it_interval 为间隔时间。it.it_value 为初次定时时间。
 		it.it_interval.tv_sec = 0
 		it.it_interval.set_usec(1000000 / hz)
 		it.it_value = it.it_interval
+		// 调用系统函数SYS_setittimer，设置定时器， ITIMER_PROF 以该进程在用户态下和内核态下所费的时间来计算，它送出 SIGPROF 信号。 见： sys_linux_amd64.s 
+		//  SIGPROF 信号处理函数在 sighandler 中，然后调用 sigprof 函数， 见：signal_sighandler.go 
 		setitimer(_ITIMER_PROF, &it, nil)
 	}
 	_g_ := getg()
@@ -711,6 +724,7 @@ func unblocksig(sig uint32) {
 
 // minitSignals is called when initializing a new m to set the
 // thread's alternate signal stack and signal mask.
+// 初始化新的 m 调用 minitSignals 来设置线程所需要的 alternate signal stack （备用信号栈）和 mask 时。
 func minitSignals() {
 	minitSignalStack()
 	minitSignalMask()
@@ -724,14 +738,22 @@ func minitSignals() {
 // signal stack and then calls a Go function) then set the gsignal
 // stack to the alternate signal stack. Record which choice was made
 // in newSigstack, so that it can be undone in unminit.
+// 初始化新 m 以设置备用信号栈时调用 minitSignalStack。如果没有为线程设置备用信号栈（正常情况），则将备用信号栈设置为 gsignal 栈。
+// 如果为线程设置了备用信号栈（非 Go 线程设置备用信号栈然后调用 Go 函数的情况）， 则将 gsignal 栈设置为备用信号栈。如果没有使用 cgo 
+// 我们还设置了额外的 gsignal 信号栈（无论其是否已经被设置），则记录在 newSigstack 中做出的选择，以便可以在 unminit 中撤消。
 func minitSignalStack() {
 	_g_ := getg()
 	var st stackt
-	sigaltstack(nil, &st)
+	// sigaltstack 为系统调用( int sigaltstack(const stack_t *ss, stack_t *old_ss); )，在 sys_linux_amd64.s 中
+	// sigaltstack 是用于 设置/获取 专门的信号处理函数使用的栈空间的。
+	sigaltstack(nil, &st) // 获取备用信号栈
+	// 检测备用信号栈是否被禁用了
 	if st.ss_flags&_SS_DISABLE != 0 {
+		// 将 gsignal 的执行栈设置为备用信号栈
 		signalstack(&_g_.m.gsignal.stack)
 		_g_.m.newSigstack = true
 	} else {
+		// 否则将 m 的 gsignal 栈设置为从 sigaltstack 返回的备用信号栈
 		setGsignalStack(&st, &_g_.m.goSigStack)
 		_g_.m.newSigstack = false
 	}
@@ -745,8 +767,12 @@ func minitSignalStack() {
 // removes all essential signals from the mask, thus causing those
 // signals to not be blocked. Then it sets the thread's signal mask.
 // After this is called the thread can receive signals.
+// 调用 minitSignalMask 为新的 m 设置信号掩码。当此函数调用时，这个线程的所有信号已经被阻塞。m.sigmask 是 通过 initSigmask 为新线程设置 或
+// 在非GO调用GO情况下调用 msigsave 设置。从 m.sigmask 中删除信号掩码中所有的必要的信号，从而导致这些信号不会阻塞。然后设置这个线程的信号掩码，
+// 调用此函数后，线程可以接受信号了。
 func minitSignalMask() {
 	nmask := getg().m.sigmask
+	// 遍历 sigtable ， 删除不阻塞的信号
 	for i := range sigtable {
 		if !blockableSig(uint32(i)) {
 			sigdelset(&nmask, i)
@@ -781,19 +807,24 @@ func unminitSignals() {
 // for all running threads to block them and delay their delivery until
 // we start a new thread. When linked into a C program we let the C code
 // decide on the disposition of those signals.
+// blockableSig 报告信号掩码是否可能阻塞。我们永远不会阻塞标记为 _SigUnblock 的信号；这些都是同步信号（跟当前的执行者一起执行缺出了状况所发出的 signal，
+// 比如 SIGILL (Illegal Instruction : 非法指令) 和 SIGTRAP (Trace/breakpoint trap) ），而让 GO 语言的处理方法会使之成为 panic 。在Go程序中， 而不是
+//  c-archive/c-shared ，我们从不希望阻塞标记为 _SigKill 或 _SigThrow 的信号，否则所有正在运行的线程都可以阻塞它们并延迟其交付，直到我们开始一个新线程为止。
+// 当链接到C程序时，我们让 C 代码决定这些信号的配置。
 func blockableSig(sig uint32) bool {
 	flags := sigtable[sig].flags
-	if flags&_SigUnblock != 0 {
+	if flags&_SigUnblock != 0 { // _SigUnblock 不阻塞
 		return false
 	}
-	if isarchive || islibrary {
+	if isarchive || islibrary { // c-archive/c-shared 阻塞
 		return true
 	}
-	return flags&(_SigKill|_SigThrow) == 0
+	return flags&(_SigKill|_SigThrow) == 0 // _SigKill 或者 _SigThrow 不阻塞，其他阻塞
 }
 
 // gsignalStack saves the fields of the gsignal stack changed by
 // setGsignalStack.
+//  gsignalStack 保存由 setGsignalStack 更改的 gsignal 堆栈的字段。
 type gsignalStack struct {
 	stack       stack
 	stackguard0 uintptr
@@ -806,6 +837,8 @@ type gsignalStack struct {
 // It saves the old values in *old for use by restoreGsignalStack.
 // This is used when handling a signal if non-Go code has set the
 // alternate signal stack.
+// setGsignalStack 将当前 m 的 gsignal 栈设置为从 sigaltstack 系统调用返回的备用信号堆栈。它将旧值保存在 *old 中以供 restoreGsignalStack 使用。
+// 这个函数用在当不是 Go 代码设置了备用信号站的情况。
 //go:nosplit
 //go:nowritebarrierrec
 func setGsignalStack(st *stackt, old *gsignalStack) {
@@ -836,11 +869,12 @@ func restoreGsignalStack(st *gsignalStack) {
 }
 
 // signalstack sets the current thread's alternate signal stack to s.
+// signalstack 设置当前线程的额外信号栈 G 
 //go:nosplit
 func signalstack(s *stack) {
-	st := stackt{ss_size: s.hi - s.lo}
-	setSignalstackSP(&st, s.lo)
-	sigaltstack(&st, nil)
+	st := stackt{ss_size: s.hi - s.lo} // 设置栈大小
+	setSignalstackSP(&st, s.lo)        // 设置栈SP
+	sigaltstack(&st, nil)              // 设置备用信号栈
 }
 
 // setsigsegv is used on darwin/arm{,64} to fake a segmentation fault.

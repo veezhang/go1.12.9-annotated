@@ -603,8 +603,8 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	RET
 
 // set tls base to DI
-//【设置tls】
-//【调用了一个系统函数arch_prctl(ARCH_SET_FS), 而这个系统调用其实是设置FS段寄存器的基址，也就是runtime.tls0。】
+// 设置tls
+// 调用了一个系统函数arch_prctl(ARCH_SET_FS), 而这个系统调用其实是设置FS段寄存器的基址，也就是 runtime.tls0 。
 TEXT runtime·settls(SB),NOSPLIT,$32
 #ifdef GOOS_android
 	// Same as in sys_darwin_386.s:/ugliness, different constant.
@@ -612,15 +612,18 @@ TEXT runtime·settls(SB),NOSPLIT,$32
 	// See cgo/gcc_android_amd64.c for the derivation of the constant.
 	SUBQ	$0x1d0, DI  // In android, the tls base
 #else
+	// DI寄存器中存放的是 m.tls[0] 的地址，下面这一句代码把DI寄存器中的地址加 8 ，主要跟 ELF 可执行文件格式中的 TLS 实现的机制有关
+	// 执行下面这句指令之后DI寄存器中的存放的就是 m.tls[1] 的地址了
 	ADDQ	$8, DI	// ELF wants to use -8(FS)
 #endif
-	MOVQ	DI, SI
-	MOVQ	$0x1002, DI	// ARCH_SET_FS
-	MOVQ	$SYS_arch_prctl, AX
-	SYSCALL
+	// 下面通过 arch_prctl 系统调用设置 FS 段基址
+	MOVQ	DI, SI							// SI 存放 arch_prctl 系统调用的第二个参数
+	MOVQ	$0x1002, DI	// ARCH_SET_FS		// arch_prctl 的第一个参数
+	MOVQ	$SYS_arch_prctl, AX				// 系统调用编号
+	SYSCALL									// 进行系统调用
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
-	MOVL	$0xf1, 0xf1  // crash
+	MOVL	$0xf1, 0xf1  // crash 			// 系统调用失败直接 crash
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
@@ -678,12 +681,13 @@ TEXT runtime·epollwait(SB),NOSPLIT,$0
 	RET
 
 // void runtime·closeonexec(int32 fd);
+// 调用 fcntl 来实现 fcntl
 TEXT runtime·closeonexec(SB),NOSPLIT,$0
-	MOVL    fd+0(FP), DI  // fd
-	MOVQ    $2, SI  // F_SETFD
-	MOVQ    $1, DX  // FD_CLOEXEC
-	MOVL	$SYS_fcntl, AX
-	SYSCALL
+	MOVL    fd+0(FP), DI  // fd		// 获取参数 fd
+	MOVQ    $2, SI  // F_SETFD		// 设置 fcntl 第二个参数为 F_SETFD
+	MOVQ    $1, DX  // FD_CLOEXEC	// 设置 fcntl 第三个参数为 FD_CLOEXEC , 1 为开启
+	MOVL	$SYS_fcntl, AX			// 设置系统调用函数为 fcntl
+	SYSCALL							// 调用系统函数 fcntl(fd, F_SETFD, FD_CLOEXEC)
 	RET
 
 

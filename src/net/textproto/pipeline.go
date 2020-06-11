@@ -69,6 +69,7 @@ func (p *Pipeline) EndResponse(id uint) {
 // happen in order, one after the other. The event numbering must start
 // at 0 and increment without skipping. The event number wraps around
 // safely as long as there are not 2^32 simultaneous events pending.
+// sequencer调度一系列必须顺序发生的编号事件，一个接一个。事件编号必须从0开始并递增而不跳过。只要没有2^32个同时发生的事件待处理，事件号就会安全地回绕。
 type sequencer struct {
 	mu   sync.Mutex
 	id   uint
@@ -78,6 +79,7 @@ type sequencer struct {
 // Start waits until it is time for the event numbered id to begin.
 // That is, except for the first event, it waits until End(id-1) has
 // been called.
+// Start 等待直到编号为id的事件开始。也就是说，除了第一个事件外，它一直等到End(id-1)被调用。
 func (s *sequencer) Start(id uint) {
 	s.mu.Lock()
 	if s.id == id {
@@ -96,6 +98,7 @@ func (s *sequencer) Start(id uint) {
 // End notifies the sequencer that the event numbered id has completed,
 // allowing it to schedule the event numbered id+1.  It is a run-time error
 // to call End with an id that is not the number of the active event.
+// End通知定序器编号为id的事件已完成，从而允许它调度编号为id + 1的事件。调用ID不是活动事件编号的End会出现运行时错误。
 func (s *sequencer) End(id uint) {
 	s.mu.Lock()
 	if s.id != id {

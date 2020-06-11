@@ -43,6 +43,7 @@ func supportsIPv6() bool {
 // supportsIPv4map reports whether the platform supports mapping an
 // IPv4 address inside an IPv6 address at transport layer
 // protocols. See RFC 4291, RFC 4038 and RFC 3493.
+// Ipv4 地址映射到 IPv6 地址内
 func supportsIPv4map() bool {
 	ipStackCaps.Once.Do(ipStackCaps.probe)
 	return ipStackCaps.ipv4MappedIPv6Enabled
@@ -153,6 +154,7 @@ func ipv6only(addr IPAddr) bool {
 //
 // See func Dial for a description of the hostport parameter, and host
 // and port results.
+// SplitHostPort 拆分网络地址，返回 host , port
 func SplitHostPort(hostport string) (host, port string, err error) {
 	const (
 		missingPort   = "missing port in address"
@@ -164,12 +166,14 @@ func SplitHostPort(hostport string) (host, port string, err error) {
 	j, k := 0, 0
 
 	// The port starts after the last colon.
+	// 端口
 	i := last(hostport, ':')
 	if i < 0 {
 		return addrErr(hostport, missingPort)
 	}
 
 	if hostport[0] == '[' {
+		// IPv6
 		// Expect the first ']' just before the last ':'.
 		end := bytealg.IndexByteString(hostport, ']')
 		if end < 0 {
@@ -192,6 +196,7 @@ func SplitHostPort(hostport string) (host, port string, err error) {
 		host = hostport[1:end]
 		j, k = 1, end+1 // there can't be a '[' resp. ']' before these positions
 	} else {
+		// IPv4
 		host = hostport[:i]
 		if bytealg.IndexByteString(host, ':') >= 0 {
 			return addrErr(hostport, tooManyColons)
@@ -208,6 +213,7 @@ func SplitHostPort(hostport string) (host, port string, err error) {
 	return host, port, nil
 }
 
+// splitHostZone 拆分 host zone ,
 func splitHostZone(s string) (host, zone string) {
 	// The IPv6 scoped addressing zone identifier starts after the
 	// last percent sign.
@@ -237,26 +243,32 @@ func JoinHostPort(host, port string) string {
 // address or a DNS name, and returns a list of internet protocol
 // family addresses. The result contains at least one address when
 // error is nil.
+// internetAddrList 解析 addr（它可以是 IP 地址或 DNS 名称），并返回互联网协议族地址列表。 错误为 nil 时，结果至少包含一个地址。
 func (r *Resolver) internetAddrList(ctx context.Context, net, addr string) (addrList, error) {
 	var (
 		err        error
 		host, port string
 		portnum    int
 	)
+	// 不同的网络协议
 	switch net {
+	// tcp/udp
 	case "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
 		if addr != "" {
 			if host, port, err = SplitHostPort(addr); err != nil {
 				return nil, err
 			}
+			// 根据 port 来获取真正的 port ，port 可以是协议，比如 http
 			if portnum, err = r.LookupPort(ctx, net, port); err != nil {
 				return nil, err
 			}
 		}
+	// ip
 	case "ip", "ip4", "ip6":
 		if addr != "" {
 			host = addr
 		}
+	// 不支持的
 	default:
 		return nil, UnknownNetworkError(net)
 	}
@@ -272,11 +284,13 @@ func (r *Resolver) internetAddrList(ctx context.Context, net, addr string) (addr
 			panic("unexpected network: " + net)
 		}
 	}
+	// host 为空
 	if host == "" {
 		return addrList{inetaddr(IPAddr{})}, nil
 	}
 
 	// Try as a literal IP address, then as a DNS name.
+	// 尝试 IP 地址，然后再是 DNS
 	ips, err := r.lookupIPAddr(ctx, net, host)
 	if err != nil {
 		return nil, err
@@ -285,10 +299,12 @@ func (r *Resolver) internetAddrList(ctx context.Context, net, addr string) (addr
 	// IPv6 such that it can bind on "::" (IPv6unspecified)
 	// but not connect back to that same address, fall
 	// back to dialing 0.0.0.0.
+	// 如果只有一个地址，如果是 "::" (IPv6unspecified) 地址，也添加一个 IPv4zero 地址
 	if len(ips) == 1 && ips[0].IP.Equal(IPv6unspecified) {
 		ips = append(ips, IPAddr{IP: IPv4zero})
 	}
 
+	// IPv4 和 IPc6 过滤，如果指定了使用 IPv4/IPv6
 	var filter func(IPAddr) bool
 	if net != "" && net[len(net)-1] == '4' {
 		filter = ipv4only
@@ -299,6 +315,7 @@ func (r *Resolver) internetAddrList(ctx context.Context, net, addr string) (addr
 	return filterAddrList(filter, ips, inetaddr, host)
 }
 
+// loopbackIP 本地循环地址
 func loopbackIP(net string) IP {
 	if net != "" && net[len(net)-1] == '6' {
 		return IPv6loopback

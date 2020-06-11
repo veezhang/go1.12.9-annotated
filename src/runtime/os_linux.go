@@ -274,7 +274,7 @@ func sysauxv(auxv []uintptr) int {
 	return i / 2
 }
 
-//【初始化os， 根据不同的平台也不一样】
+// 初始化os， 根据不同的平台也不一样
 func osinit() {
 	ncpu = getproccount()
 }
@@ -300,6 +300,8 @@ func goenvs() {
 // Called to do synchronous initialization of Go code built with
 // -buildmode=c-archive or -buildmode=c-shared.
 // None of the Go runtime is initialized.
+// 调用以对用 -buildmode=c-archive or -buildmode=c-shared 构建的Go代码进行同步初始化。Go运行时尚未初始化。
+// asm_amd64.s 中 _rt0_amd64_lib 会调用此函数
 //go:nosplit
 //go:nowritebarrierrec
 func libpreinit() {
@@ -317,11 +319,13 @@ func gettid() uint32
 
 // Called to initialize a new m (including the bootstrap m).
 // Called on the new thread, cannot allocate memory.
+// 调用以初始化新的 m （包括引导程序 m ）。在新线程上调用，无法分配内存。
 func minit() {
 	minitSignals()
 
 	// for debuggers, in case cgo created the thread
-	getg().m.procid = uint64(gettid())
+	// 为了调试，当 cgo 创建的线程
+	getg().m.procid = uint64(gettid()) //  gettid 为系统调用，在sys_linux_amd64.s中
 }
 
 // Called from dropm to undo the effect of an minit.
@@ -383,6 +387,7 @@ func setsig(i uint32, fn uintptr) {
 	sigaction(i, &sa, nil)
 }
 
+// 设置备用信号栈，加上 _SA_ONSTACK 标记
 //go:nosplit
 //go:nowritebarrierrec
 func setsigstack(i uint32) {

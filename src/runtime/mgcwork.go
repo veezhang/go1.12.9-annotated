@@ -45,6 +45,9 @@ func init() {
 // produce pointers to grey objects. Scanning consumes pointers to
 // grey objects, thus blackening them, and then scans them,
 // potentially producing new pointers to grey objects.
+// GC工作池抽象
+// 这实现了生产者/消费者模型来置灰对象。灰色对象是已标记并在工作队列中的对象。黑色对象被标记并且不在工作队列上。
+// 写障碍，根发现，堆栈扫描和对象扫描产生指向灰色对象的指针。扫描会消耗指向灰色对象的指针，从而使它们变黑，然后对其进行扫描，从而有可能产生指向灰色对象的新指针。
 
 // A gcWork provides the interface to produce and consume work for the
 // garbage collector.
@@ -59,6 +62,7 @@ func init() {
 // the garbage collector from transitioning to mark termination since
 // gcWork may locally hold GC work buffers. This can be done by
 // disabling preemption (systemstack or acquirem).
+// 重要的是，在标记阶段使用gcWork可以防止垃圾回收器过渡到标记终止，因为gcWork可能在本地保留GC工作缓冲区。这可以通过禁用抢占（systemstack或acquirem）来完成。
 type gcWork struct {
 	// wbuf1 and wbuf2 are the primary and secondary work buffers.
 	//
@@ -78,31 +82,43 @@ type gcWork struct {
 	// next.
 	//
 	// Invariant: Both wbuf1 and wbuf2 are nil or neither are.
+	// wbuf1和wbuf2是主要和辅助工作缓冲区。
+	// 可以认为这是两个工作缓冲区的指针串联在一起的堆栈。当我们弹出最后一个指针时，我们通过引入一个新的完整缓冲区并丢弃一个空缓冲区，将堆栈向上移动一个工作缓冲区。
+	// 当我们填充两个缓冲区时，我们通过引入一个新的空缓冲区并丢弃一个完整的缓冲区，将堆栈向下移动一个工作缓冲区。这样，我们就有了一个缓冲区的滞后值，这可以分摊在至少
+	// 一个工作缓冲区上获得或放置工作缓冲区的成本，并减少全局工作列表上的竞争。
+	// wbuf1始终是我们当前要推送到并从中弹出的缓冲区，而wbuf2是接下来将被丢弃的缓冲区。
+	// 不变式：wbuf1和wbuf2均为nil或都不为nil。
 	wbuf1, wbuf2 *workbuf
 
 	// Bytes marked (blackened) on this gcWork. This is aggregated
 	// into work.bytesMarked by dispose.
+	// 在此gcWork上标记（涂黑）的字节。通过dispose方将其汇总到work.bytes中。
 	bytesMarked uint64
 
 	// Scan work performed on this gcWork. This is aggregated into
 	// gcController by dispose and may also be flushed by callers.
+	// 扫描在此gcWork上执行的工作。 通过dispose方法将其汇总到gcController中，也可以由调用方将其刷新。
 	scanWork int64
 
 	// flushedWork indicates that a non-empty work buffer was
 	// flushed to the global work list since the last gcMarkDone
 	// termination check. Specifically, this indicates that this
 	// gcWork may have communicated work to another gcWork.
+	// flushedWork指示自上一次gcMarkDone终止检查以来，非空工作缓冲区已刷新到全局工作列表。具体来说，这表明此gcWork可能已经将工作传达给了另一个gcWork。
 	flushedWork bool
 
 	// pauseGen causes put operations to spin while pauseGen ==
 	// gcWorkPauseGen if debugCachedWork is true.
+	// 如果debugCachedWork为true，当pauseGen == gcWorkPauseGen，则pauseGen会导操作自旋。
 	pauseGen uint32
 
 	// putGen is the pauseGen of the last putGen.
+	// putGen是最后一个putGen的pauseGen。
 	putGen uint32
 
 	// pauseStack is the stack at which this P was paused if
 	// debugCachedWork is true.
+	// 如果debugCachedWork为true，pauseStack是此P暂停的堆栈。
 	pauseStack [16]uintptr
 }
 
@@ -112,6 +128,9 @@ type gcWork struct {
 // write barrier while the gcWork was in an inconsistent state, and
 // the write barrier in turn invoked a gcWork method, it could
 // permanently corrupt the gcWork.
+// gcWork的大多数方法都是go:nowritebarrierrec，因为写屏障本身可以调用gcWork方法，但这些方法通常不能重入。因此，
+// 如果在gcWork处于不一致状态时gcWork方法调用了写屏障，而写屏障又又调用了gcWork方法，则它可能会永久破坏gcWork。
+// go:nowritebarrierrec => 如果函数包含 write barrier，则 go:nowritebarrier 触发一个编译器错误（它不会抑制 write barrier 的产生，只是一个断言）。
 
 func (w *gcWork) init() {
 	w.wbuf1 = getempty()

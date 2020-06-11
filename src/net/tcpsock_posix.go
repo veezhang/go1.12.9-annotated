@@ -13,16 +13,18 @@ import (
 	"syscall"
 )
 
+// Sockaddr 转 Addr （TCP）
 func sockaddrToTCP(sa syscall.Sockaddr) Addr {
 	switch sa := sa.(type) {
-	case *syscall.SockaddrInet4:
+	case *syscall.SockaddrInet4: // IPv4
 		return &TCPAddr{IP: sa.Addr[0:], Port: sa.Port}
-	case *syscall.SockaddrInet6:
+	case *syscall.SockaddrInet6: // IPv6
 		return &TCPAddr{IP: sa.Addr[0:], Port: sa.Port, Zone: zoneCache.name(int(sa.ZoneId))}
 	}
 	return nil
 }
 
+// 获取 IP 族， AF_INET or AF_INET6
 func (a *TCPAddr) family() int {
 	if a == nil || len(a.IP) <= IPv4len {
 		return syscall.AF_INET
@@ -40,10 +42,12 @@ func (a *TCPAddr) sockaddr(family int) (syscall.Sockaddr, error) {
 	return ipToSockaddr(family, a.IP, a.Port, a.Zone)
 }
 
+// 转为本地循环地址 lo
 func (a *TCPAddr) toLocal(net string) sockaddr {
 	return &TCPAddr{loopbackIP(net), a.Port, a.Zone}
 }
 
+// 从 r 读取，最终调用 splice 或 sendfile 系统调用
 func (c *TCPConn) readFrom(r io.Reader) (int64, error) {
 	if n, err, handled := splice(c.fd, r); handled {
 		return n, err
@@ -54,6 +58,7 @@ func (c *TCPConn) readFrom(r io.Reader) (int64, error) {
 	return genericReadFrom(c, r)
 }
 
+// TCP 拨号
 func (sd *sysDialer) dialTCP(ctx context.Context, laddr, raddr *TCPAddr) (*TCPConn, error) {
 	if testHookDialTCP != nil {
 		return testHookDialTCP(ctx, sd.network, laddr, raddr)
@@ -61,7 +66,9 @@ func (sd *sysDialer) dialTCP(ctx context.Context, laddr, raddr *TCPAddr) (*TCPCo
 	return sd.doDialTCP(ctx, laddr, raddr)
 }
 
+// TCP 拨号
 func (sd *sysDialer) doDialTCP(ctx context.Context, laddr, raddr *TCPAddr) (*TCPConn, error) {
+	// 创建网络 socket
 	fd, err := internetSocket(ctx, sd.network, laddr, raddr, syscall.SOCK_STREAM, 0, "dial", sd.Dialer.Control)
 
 	// TCP has a rarely used mechanism called a 'simultaneous connection' in
@@ -88,6 +95,9 @@ func (sd *sysDialer) doDialTCP(ctx context.Context, laddr, raddr *TCPAddr) (*TCP
 	// a different reason.
 	//
 	// The kernel socket code is no doubt enjoying watching us squirm.
+	//
+	// TCP 有自连接的情况(TCP self connection)，重试
+	// EADDRNOTAVAIL 地址已经占用，重试
 	for i := 0; i < 2 && (laddr == nil || laddr.Port == 0) && (selfConnect(fd, err) || spuriousENOTAVAIL(err)); i++ {
 		if err == nil {
 			fd.Close()
@@ -98,11 +108,14 @@ func (sd *sysDialer) doDialTCP(ctx context.Context, laddr, raddr *TCPAddr) (*TCP
 	if err != nil {
 		return nil, err
 	}
+	// 创建 TCPConn
 	return newTCPConn(fd), nil
 }
 
+// 判断是否是 TCP 自连接
 func selfConnect(fd *netFD, err error) bool {
 	// If the connect failed, we clearly didn't connect to ourselves.
+	// 如果连接失败，我们显然不会连接到我们自己。
 	if err != nil {
 		return false
 	}
@@ -115,14 +128,17 @@ func selfConnect(fd *netFD, err error) bool {
 	// a problem, we make sure if this happens we recognize trouble and
 	// ask the DialTCP routine to try again.
 	// TODO: try to understand what's really going on.
+	// 在某些未知的情况下可能返回 raddr 为 nil 。
 	if fd.laddr == nil || fd.raddr == nil {
 		return true
 	}
+	// 对比 IP 端口是否相等
 	l := fd.laddr.(*TCPAddr)
 	r := fd.raddr.(*TCPAddr)
 	return l.Port == r.Port && l.IP.Equal(r.IP)
 }
 
+// 是否 ENOTAVAIL 错误
 func spuriousENOTAVAIL(err error) bool {
 	if op, ok := err.(*OpError); ok {
 		err = op.Err
@@ -133,20 +149,26 @@ func spuriousENOTAVAIL(err error) bool {
 	return err == syscall.EADDRNOTAVAIL
 }
 
+// ok 返回 ln 是否正常
 func (ln *TCPListener) ok() bool { return ln != nil && ln.fd != nil }
 
+// accept 请求
 func (ln *TCPListener) accept() (*TCPConn, error) {
+	// 调用 netFD 的 accept 请求连接
 	fd, err := ln.fd.accept()
 	if err != nil {
 		return nil, err
 	}
+	// 返回 TCPConn
 	return newTCPConn(fd), nil
 }
 
+// close 关闭连接
 func (ln *TCPListener) close() error {
 	return ln.fd.Close()
 }
 
+// file 返回底层 os.File 的一个副本
 func (ln *TCPListener) file() (*os.File, error) {
 	f, err := ln.fd.dup()
 	if err != nil {
@@ -155,6 +177,7 @@ func (ln *TCPListener) file() (*os.File, error) {
 	return f, nil
 }
 
+// 监听 TCP
 func (sl *sysListener) listenTCP(ctx context.Context, laddr *TCPAddr) (*TCPListener, error) {
 	fd, err := internetSocket(ctx, sl.network, laddr, nil, syscall.SOCK_STREAM, 0, "listen", sl.ListenConfig.Control)
 	if err != nil {

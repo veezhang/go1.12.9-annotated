@@ -21,29 +21,34 @@ import (
 //
 // Many of these fields are updated on the fly, while others are only
 // updated when updatememstats is called.
+//
+// 统计：如果您编辑此结构，请同时在下面编辑MemStats类型。它们的布局必须完全匹配。有关详细说明，请参阅MemStats文档。
+// 与MemStats不同的字段将在此处进一步记录。这些字段中的许多都是动态更新的，而其他字段仅在调用updatememstats时更新。
 type mstats struct {
-	// General statistics.
-	alloc       uint64 // bytes allocated and not yet freed
-	total_alloc uint64 // bytes allocated (even if freed)
-	sys         uint64 // bytes obtained from system (should be sum of xxx_sys below, no locking, approximate)
-	nlookup     uint64 // number of pointer lookups (unused)
-	nmalloc     uint64 // number of mallocs
-	nfree       uint64 // number of frees
+	// General statistics. // 一般统计
+	alloc       uint64 // bytes allocated and not yet freed // 已分配但尚未释放的字节
+	total_alloc uint64 // bytes allocated (even if freed) // 分配的字节（即使已释放）
+	sys         uint64 // bytes obtained from system (should be sum of xxx_sys below, no locking, approximate) // 从系统获得的字节（应为以下xxx_sys的总和，无锁定，近似值）
+	nlookup     uint64 // number of pointer lookups (unused) // 指针查找数（未使用）
+	nmalloc     uint64 // number of mallocs // 分配的数目
+	nfree       uint64 // number of frees // 释放的数目
 
 	// Statistics about malloc heap.
 	// Protected by mheap.lock
 	//
 	// Like MemStats, heap_sys and heap_inuse do not count memory
 	// in manually-managed spans.
-	heap_alloc    uint64 // bytes allocated and not yet freed (same as alloc above)
-	heap_sys      uint64 // virtual address space obtained from system for GC'd heap
-	heap_idle     uint64 // bytes in idle spans
-	heap_inuse    uint64 // bytes in mSpanInUse spans
-	heap_released uint64 // bytes released to the os
-	heap_objects  uint64 // total number of allocated objects
+	// 有关malloc堆的统计信息。受mheap.lock保护与MemStats一样，heap_sys和heap_inuse不会在手动管理的spans内计算内存。
+	heap_alloc    uint64 // bytes allocated and not yet freed (same as alloc above) // 已分配但尚未释放的字节（与上面的alloc相同）
+	heap_sys      uint64 // virtual address space obtained from system for GC'd heap //  从系统获得的用于GC堆的虚拟地址空间
+	heap_idle     uint64 // bytes in idle spans	// 空闲spans中的字节
+	heap_inuse    uint64 // bytes in mSpanInUse spans // mSpanInUse中的spans的字节
+	heap_released uint64 // bytes released to the os // 释放到操作系统的字节
+	heap_objects  uint64 // total number of allocated objects // 分配的对象总数
 
 	// Statistics about allocation of low-level fixed-size structures.
 	// Protected by FixAlloc locks.
+	// 有关低级别固定大小结构分配的统计信息。受FixAlloc锁保护。
 	stacks_inuse uint64 // bytes in manually-managed stack spans
 	stacks_sys   uint64 // only counts newosproc0 stack in mstats; differs from MemStats.StackSys
 	mspan_inuse  uint64 // mspan structures
@@ -56,6 +61,7 @@ type mstats struct {
 
 	// Statistics about garbage collector.
 	// Protected by mheap or stopping the world during GC.
+	// 有关垃圾收集器的统计信息。 在GC期间受到堆或stopping the world的保护。
 	next_gc         uint64 // goal heap_live for when next GC ends; ^0 if disabled
 	last_gc_unix    uint64 // last gc (in unix time)
 	pause_total_ns  uint64
@@ -68,7 +74,7 @@ type mstats struct {
 	debuggc         bool
 
 	// Statistics about allocation size classes.
-
+	// 有关分配大小类的统计信息。
 	by_size [_NumSizeClasses]struct {
 		size    uint32
 		nmalloc uint64
@@ -76,7 +82,7 @@ type mstats struct {
 	}
 
 	// Statistics below here are not exported to MemStats directly.
-
+	// 下面的统计信息不会直接导出到MemStats。
 	last_gc_nanotime uint64 // last gc (monotonic time)
 	tinyallocs       uint64 // number of tiny allocations that didn't cause actual allocation; not exported to go directly
 

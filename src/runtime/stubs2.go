@@ -31,6 +31,7 @@ func madvise(addr unsafe.Pointer, n uintptr, flags int32) int32
 
 // exitThread terminates the current thread, writing *wait = 0 when
 // the stack is safe to reclaim.
+// 当栈可以安全回收时， exitThread终止当前线程，并写入 *wait = 0 。
 //
 //go:noescape
 func exitThread(wait *uint32)

@@ -39,6 +39,8 @@ const testSmallBuf = false
 // This is closely related to a "sequential store buffer" (SSB),
 // except that SSBs are usually used for maintaining remembered sets,
 // while this is used for marking.
+// wbBuf是由写屏障排队的每个P缓冲区的指针。 此缓冲区填满并进行各种GC转换时，将刷新到GC工作缓冲区。
+// 这与“顺序存储缓冲区”（SSB）密切相关，不同之处在于，SSB通常用于维护记忆集，而这个用于标记。
 type wbBuf struct {
 	// next points to the next slot in buf. It must not be a
 	// pointer type because it can point past the end of buf and

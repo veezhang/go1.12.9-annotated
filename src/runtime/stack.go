@@ -65,6 +65,7 @@ const (
 	// to each stack below the usual guard area for OS-specific
 	// purposes like signal handling. Used on Windows, Plan 9,
 	// and iOS because they do not use a separate stack.
+	// _StackSystem
 	_StackSystem = sys.GoosWindows*512*sys.PtrSize + sys.GoosPlan9*512 + sys.GoosDarwin*sys.GoarchArm*1024 + sys.GoosDarwin*sys.GoarchArm64*1024
 
 	// The minimum size of stack used by Go code
@@ -482,6 +483,7 @@ func stackfree(stk stack) {
 	}
 }
 
+// goroutine 最大栈大小 1GB
 var maxstacksize uintptr = 1 << 20 // enough until runtime.main sets it for real
 
 var ptrnames = []string{
@@ -1062,10 +1064,11 @@ func nilfunc() {
 
 // adjust Gobuf as if it executed a call to fn
 // and then did an immediate gosave.
+// 调整 Gobuf ，就好像它执行了对 fn 的调用了一样，然后立即进行 gosave 。
 func gostartcallfn(gobuf *gobuf, fv *funcval) {
 	var fn unsafe.Pointer
 	if fv != nil {
-		fn = unsafe.Pointer(fv.fn)
+		fn = unsafe.Pointer(fv.fn) // fn: gorotine 的入口地址，初始化时对应的是 runtime.main ，其它对应各自的 gorotine 的入口地址。
 	} else {
 		fn = unsafe.Pointer(funcPC(nilfunc))
 	}

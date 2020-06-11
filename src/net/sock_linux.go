@@ -6,6 +6,7 @@ package net
 
 import "syscall"
 
+// 获取系统中每一个端口最大的监听队列的长度 , listen 系统调用的第二个参数 backlog
 func maxListenerBacklog() int {
 	fd, err := open("/proc/sys/net/core/somaxconn")
 	if err != nil {

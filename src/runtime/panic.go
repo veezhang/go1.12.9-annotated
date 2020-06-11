@@ -160,6 +160,8 @@ func totaldefersize(siz uintptr) uintptr {
 
 // Ensure that defer arg sizes that map to the same defer size class
 // also map to the same malloc size class.
+//
+// 确保映射到相同延迟大小类的延迟arg大小也映射到相同的malloc大小类。
 func testdefersizes() {
 	var m [len(p{}.deferpool)]int32
 
@@ -211,16 +213,21 @@ func init() {
 //go:nosplit
 func newdefer(siz int32) *_defer {
 	var d *_defer
+	// 根据 size 通过deferclass判断应该分配的 sizeclass，就类似于 内存分配预先确定好几个sizeclass，然后根据size确定sizeclass，找对应的缓存的内存块
 	sc := deferclass(uintptr(siz))
 	gp := getg()
+	// 如果sizeclass在既定的sizeclass范围内，去g绑定的p上找
 	if sc < uintptr(len(p{}.deferpool)) {
 		pp := gp.m.p.ptr()
+		// 当前sizeclass的缓存数量==0，且不为nil，从sched上获取一批缓存
 		if len(pp.deferpool[sc]) == 0 && sched.deferpool[sc] != nil {
 			// Take the slow path on the system stack so
 			// we don't grow newdefer's stack.
+			// 在系统堆栈上分配，这样我们就不会增加newdefer的堆栈。
 			systemstack(func() {
 				lock(&sched.deferlock)
 				for len(pp.deferpool[sc]) < cap(pp.deferpool[sc])/2 && sched.deferpool[sc] != nil {
+					// 把sched.deferpool上面的_defer移动到P上
 					d := sched.deferpool[sc]
 					sched.deferpool[sc] = d.link
 					d.link = nil
@@ -229,12 +236,14 @@ func newdefer(siz int32) *_defer {
 				unlock(&sched.deferlock)
 			})
 		}
+		// 如果从sched获取之后，sizeclass对应的缓存不为空，则在P上分配
 		if n := len(pp.deferpool[sc]); n > 0 {
 			d = pp.deferpool[sc][n-1]
 			pp.deferpool[sc][n-1] = nil
 			pp.deferpool[sc] = pp.deferpool[sc][:n-1]
 		}
 	}
+	// p和sched都没有找到 或者 没有对应的sizeclass，直接分配
 	if d == nil {
 		// Allocate new defer+args.
 		systemstack(func() {

@@ -13,4 +13,7 @@ const SpAlign = 1*(1-GoarchArm64) + 16*GoarchArm64 // SP alignment: 1 normally, 
 var DefaultGoroot string // set at link time
 
 // AIX requires a larger stack for syscalls.
+// AIX需要更大的堆栈来进行系统调用。
+// GoosAix系统，则 StackGuardMultiplier = 2；否则 StackGuardMultiplier = StackGuardMultiplierDefault
+// GO_GCFLAGS有 "-N" (禁止优化) 的时候 StackGuardMultiplierDefault = 2，否则 StackGuardMultiplierDefault = 1 
 const StackGuardMultiplier = StackGuardMultiplierDefault*(1-GoosAix) + 2*GoosAix

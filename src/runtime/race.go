@@ -366,6 +366,8 @@ func racefini() {
 	// undefined behavior if called more than once. If the lock is
 	// already held it's assumed that the first caller exits the program
 	// so other calls can hang forever without an issue.
+	// racefini()只能调用一次以避免竞争。最终（通过__tsan_fini）调用C.exit，如果多次调用，它将具有未定义的行为。如果已持有该锁，
+	// 则假定第一个调用者退出了该程序，因此其他调用可以永久挂起而不会出现问题。
 	lock(&raceFiniLock)
 	racecall(&__tsan_fini, 0, 0, 0, 0)
 }

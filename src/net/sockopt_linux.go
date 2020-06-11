@@ -9,6 +9,7 @@ import (
 	"syscall"
 )
 
+// setDefaultSockopts 设置 socket 默认 sockopts ， 允许广播（SO_BROADCAST）
 func setDefaultSockopts(s, family, sotype int, ipv6only bool) error {
 	if family == syscall.AF_INET6 && sotype != syscall.SOCK_RAW {
 		// Allow both IP versions even if the OS default
@@ -20,11 +21,13 @@ func setDefaultSockopts(s, family, sotype int, ipv6only bool) error {
 	return os.NewSyscallError("setsockopt", syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1))
 }
 
+// setDefaultListenerSockopts 设置监听默认 sockopts ，允许地址重用（SO_REUSEADDR）
 func setDefaultListenerSockopts(s int) error {
 	// Allow reuse of recently-used addresses.
 	return os.NewSyscallError("setsockopt", syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1))
 }
 
+// setDefaultMulticastSockopts 设置多播默认 sockopts ，允许地址重用（SO_REUSEADDR）
 func setDefaultMulticastSockopts(s int) error {
 	// Allow multicast UDP and raw IP datagram sockets to listen
 	// concurrently across multiple listeners.

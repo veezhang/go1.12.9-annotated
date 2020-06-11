@@ -13,6 +13,8 @@ import "syscall"
 
 // Wrapper around the accept system call that marks the returned file
 // descriptor as nonblocking and close-on-exec.
+// 包装 accept 系统调用，返回的文件描述符，已经是 SOCK_NONBLOCK 和 SOCK_CLOEXEC
+// 先尝试 accpet4 ，如果不支持再尝试 accept
 func accept(s int) (int, syscall.Sockaddr, string, error) {
 	ns, sa, err := Accept4Func(s, syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC)
 	// On Linux the accept4 system call was introduced in 2.6.28

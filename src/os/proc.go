@@ -12,11 +12,13 @@ import (
 )
 
 // Args hold the command-line arguments, starting with the program name.
+// Args保留以程序名称开头的命令行参数。
 var Args []string
 
 func init() {
 	if runtime.GOOS == "windows" {
 		// Initialized in exec_windows.go.
+		// windows系统的话，在 exec_windows.go 初始化
 		return
 	}
 	Args = runtime_args()
@@ -56,6 +58,7 @@ func Getgroups() ([]int, error) {
 // Exit causes the current program to exit with the given status code.
 // Conventionally, code zero indicates success, non-zero an error.
 // The program terminates immediately; deferred functions are not run.
+// 退出使当前程序以给定的状态码退出。通常，0 表示成功，非 0 表示错误。程序立即终止； 延迟功能无法运行。
 func Exit(code int) {
 	if code == 0 {
 		// Give race detector a chance to fail the program.

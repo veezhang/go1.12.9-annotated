@@ -113,12 +113,18 @@ func setWriteBuffer(fd *netFD, bytes int) error {
 	return wrapSyscallError("setsockopt", err)
 }
 
+// 设置 keepalive
 func setKeepAlive(fd *netFD, keepalive bool) error {
+	// 调用 setsockopt 系统调用: setsockopt(fd.Sysfd, syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, keepalive)
 	err := fd.pfd.SetsockoptInt(syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, boolint(keepalive))
 	runtime.KeepAlive(fd)
 	return wrapSyscallError("setsockopt", err)
 }
 
+// setLinger 设置 SOCKET 在 CLOSE 时候是否等待缓冲区发送完成。
+// 如果 sec < 0（默认值），则操作系统将在后台完成数据发送。
+// 如果sec == 0，则操作系统将丢弃所有未发送或未确认的数据。
+// 如果 sec > 0 ，则与 sec < 0 一样在后台发送数据。在某些操作系统上，经过 sec 秒后，可能会丢弃所有剩余的未发送数据。
 func setLinger(fd *netFD, sec int) error {
 	var l syscall.Linger
 	if sec >= 0 {
@@ -128,6 +134,7 @@ func setLinger(fd *netFD, sec int) error {
 		l.Onoff = 0
 		l.Linger = 0
 	}
+	// 调用 setsockopt 系统调用: setsockopt(fd.Sysfd, syscall.SOL_SOCKET, syscall.SO_LINGER, &l)
 	err := fd.pfd.SetsockoptLinger(syscall.SOL_SOCKET, syscall.SO_LINGER, &l)
 	runtime.KeepAlive(fd)
 	return wrapSyscallError("setsockopt", err)

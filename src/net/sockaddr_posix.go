@@ -17,18 +17,22 @@ type sockaddr interface {
 
 	// family returns the platform-dependent address family
 	// identifier.
+	// 返回地址族
 	family() int
 
 	// isWildcard reports whether the address is a wildcard
 	// address.
+	// 是否是通配符地址
 	isWildcard() bool
 
 	// sockaddr returns the address converted into a syscall
 	// sockaddr type that implements syscall.Sockaddr
 	// interface. It returns a nil interface when the address is
 	// nil.
+	// 返回用于系统调用 sockaddr 类型
 	sockaddr(family int) (syscall.Sockaddr, error)
 
 	// toLocal maps the zero address to a local system address (127.0.0.1 or ::1)
+	// 转为本地循环地址
 	toLocal(net string) sockaddr
 }

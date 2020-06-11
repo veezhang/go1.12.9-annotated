@@ -54,6 +54,7 @@ func (a *UnixAddr) opAddr() Addr {
 //
 // See func Dial for a description of the network and address
 // parameters.
+// ResolveUnixAddr 返回 Unix domain socket 地址
 func ResolveUnixAddr(network, address string) (*UnixAddr, error) {
 	switch network {
 	case "unix", "unixgram", "unixpacket":

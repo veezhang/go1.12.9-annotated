@@ -16,10 +16,12 @@ import (
 )
 
 // Network file descriptor.
+// 网络文件描述符
 type netFD struct {
 	pfd poll.FD
 
 	// immutable until Close
+	// 以下字段直到关闭都不会改变，网络连接相关的配置信息
 	family      int
 	sotype      int
 	isConnected bool // handshake completed or use of association with peer
@@ -28,6 +30,7 @@ type netFD struct {
 	raddr       Addr
 }
 
+// newFD 创建 netFD 网络文件描述符
 func newFD(sysfd, family, sotype int, net string) (*netFD, error) {
 	ret := &netFD{
 		pfd: poll.FD{
@@ -42,13 +45,16 @@ func newFD(sysfd, family, sotype int, net string) (*netFD, error) {
 	return ret, nil
 }
 
+// init 初始化 netFD ，linux 上加入到 epoll 中
 func (fd *netFD) init() error {
 	return fd.pfd.Init(fd.net, true)
 }
 
+// 设置地址
 func (fd *netFD) setAddr(laddr, raddr Addr) {
 	fd.laddr = laddr
 	fd.raddr = raddr
+	// GC 扫描清除的时候会执行 Close 函数
 	runtime.SetFinalizer(fd, (*netFD).Close)
 }
 

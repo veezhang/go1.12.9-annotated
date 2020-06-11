@@ -61,6 +61,8 @@ import (
 //             On Linux, could use fcntl F_DUPFD_CLOEXEC
 //             instead of the ForkLock, but only for dup(fd, -1).
 
+// ForkLock 的存在是为了避免下面的情况：在有多个 goroutine 同时 fork exec 的情况下, 为了子进程只继承它需要的文件描述符，需要在父进程在
+// 创建这些文件描述符的时候加上 O_CLOEXEC 标志，这样在子进程中这些描述符是关闭的，子进程按需把自己需要继承的描述符打开即可。
 var ForkLock sync.RWMutex
 
 // StringSlicePtr converts a slice of strings to a slice of pointers

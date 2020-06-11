@@ -16,8 +16,9 @@ import (
 // explode splits s into a slice of UTF-8 strings,
 // one string per Unicode character up to a maximum of n (n < 0 means no limit).
 // Invalid UTF-8 sequences become correct encodings of U+FFFD.
+// 将 s 分解为 UTF-8 字符串的一个切片，每个 Unicode 字符一个字符串，最大为n（ n < 0 表示没有限制）。
 func explode(s string, n int) []string {
-	l := utf8.RuneCountInString(s)
+	l := utf8.RuneCountInString(s) // 计算多少个 UTF-8 字符
 	if n < 0 || n > l {
 		n = l
 	}
@@ -37,15 +38,29 @@ func explode(s string, n int) []string {
 }
 
 // primeRK is the prime base used in Rabin-Karp algorithm.
+// primaRK 是 Rabin-Karp 算法中使用的质数 FNV hash
 const primeRK = 16777619
 
 // hashStr returns the hash and the appropriate multiplicative
 // factor for use in Rabin-Karp algorithm.
+// hashStr 返回哈希值和在Rabin-Karp算法中使用的适当乘法因子。 类似于 primeRK 进制。
+// 只有32位，超出范围的会被丢弃。
 func hashStr(sep string) (uint32, uint32) {
 	hash := uint32(0)
+	// 计算 sep 的 hash
 	for i := 0; i < len(sep); i++ {
 		hash = hash*primeRK + uint32(sep[i])
 	}
+	// 计算乘法因子
+	// 假设 len(sep) = 9 ， primeRK = 10 的话（10看起来容易辨别）
+	// i 		sq 					pow
+	// init		10					1
+	// 9 		100					10
+	// 4 		10000				10
+	// 2 		100000000			10
+	// 1 		10000000000000000	100000000
+	// 最终 pow = 100000000 , 正好第 10 位是 1 , 也就是移动字符串窗口的时候， 减去 (pow * 被移动出来的字符) 也就同时清楚了这个字符对 hash 值的影响
+	//
 	var pow, sq uint32 = 1, primeRK
 	for i := len(sep); i > 0; i >>= 1 {
 		if i&1 != 0 {
@@ -58,6 +73,7 @@ func hashStr(sep string) (uint32, uint32) {
 
 // hashStrRev returns the hash of the reverse of sep and the
 // appropriate multiplicative factor for use in Rabin-Karp algorithm.
+// hashStrRev 是 hashStr 倒序计算的
 func hashStrRev(sep string) (uint32, uint32) {
 	hash := uint32(0)
 	for i := len(sep) - 1; i >= 0; i-- {
@@ -75,14 +91,18 @@ func hashStrRev(sep string) (uint32, uint32) {
 
 // Count counts the number of non-overlapping instances of substr in s.
 // If substr is an empty string, Count returns 1 + the number of Unicode code points in s.
+// 子字符串计数
 func Count(s, substr string) int {
 	// special case
+	// 特殊情况，返回 Unicode 字符个数 + 1
 	if len(substr) == 0 {
 		return utf8.RuneCountInString(s) + 1
 	}
+	// 只有一个字节
 	if len(substr) == 1 {
 		return bytealg.CountString(s, substr[0])
 	}
+	// 其它情况使用 Index 来计数
 	n := 0
 	for {
 		i := Index(s, substr)
@@ -110,8 +130,10 @@ func ContainsRune(s string, r rune) bool {
 }
 
 // LastIndex returns the index of the last instance of substr in s, or -1 if substr is not present in s.
+// LastIndex 返回 s 中最后一个 substr 的索引
 func LastIndex(s, substr string) int {
 	n := len(substr)
+	// 先判断一些特殊情况
 	switch {
 	case n == 0:
 		return len(s)
@@ -125,6 +147,7 @@ func LastIndex(s, substr string) int {
 	case n > len(s):
 		return -1
 	}
+	// 然后使用 Rabin-Karp 算法
 	// Rabin-Karp search from the end of the string
 	hashss, pow := hashStrRev(substr)
 	last := len(s) - n
@@ -242,6 +265,7 @@ func LastIndexByte(s string, c byte) int {
 
 // Generic split: splits after each instance of sep,
 // including sepSave bytes of sep in the subarrays.
+// 通用拆分：在每个 sep 之后进行拆分，返回数组中包含 sep 中的 sepSave 字节。
 func genSplit(s, sep string, sepSave, n int) []string {
 	if n == 0 {
 		return nil
@@ -271,6 +295,7 @@ func genSplit(s, sep string, sepSave, n int) []string {
 
 // SplitN slices s into substrings separated by sep and returns a slice of
 // the substrings between those separators.
+// SplitN 将 s 切片为由 sep 分隔的子字符串，并返回这些分隔符之间的子字符串的切片。
 //
 // The count determines the number of substrings to return:
 //   n > 0: at most n substrings; the last substring will be the unsplit remainder.
@@ -321,37 +346,44 @@ func SplitAfter(s, sep string) []string {
 	return genSplit(s, sep, len(sep), -1)
 }
 
+// 空格
 var asciiSpace = [256]uint8{'\t': 1, '\n': 1, '\v': 1, '\f': 1, '\r': 1, ' ': 1}
 
 // Fields splits the string s around each instance of one or more consecutive white space
 // characters, as defined by unicode.IsSpace, returning a slice of substrings of s or an
 // empty slice if s contains only white space.
+// 根据空字符拆分
 func Fields(s string) []string {
 	// First count the fields.
 	// This is an exact count if s is ASCII, otherwise it is an approximation.
+	// 首先计算数目，如果是 ASCII ，是精确计数；否则是近似值。
 	n := 0
 	wasSpace := 1
 	// setBits is used to track which bits are set in the bytes of s.
+	// setBits 用于跟踪在 s 字节中设置了哪些位。
 	setBits := uint8(0)
 	for i := 0; i < len(s); i++ {
 		r := s[i]
 		setBits |= r
-		isSpace := int(asciiSpace[r])
-		n += wasSpace & ^isSpace
+		isSpace := int(asciiSpace[r]) // 空字符的话，isSpace 为 1 ；否则为 0
+		n += wasSpace & ^isSpace      // 如果是连续的空格，wasSpace = 1,isSpace=0 的时候 n++，否则 n 不变，也就是从空格过度到非空格的时候 n++
 		wasSpace = isSpace
 	}
 
+	// 如果 setBits < utf8.RuneSelf ，则表示全是 ASCII
 	if setBits < utf8.RuneSelf { // ASCII fast path
 		a := make([]string, n)
 		na := 0
 		fieldStart := 0
 		i := 0
 		// Skip spaces in the front of the input.
+		// 过滤头部的空字符
 		for i < len(s) && asciiSpace[s[i]] != 0 {
 			i++
 		}
 		fieldStart = i
 		for i < len(s) {
+			// 如果不是空字符
 			if asciiSpace[s[i]] == 0 {
 				i++
 				continue
@@ -360,6 +392,7 @@ func Fields(s string) []string {
 			na++
 			i++
 			// Skip spaces in between fields.
+			// 过滤字段中间的空字符
 			for i < len(s) && asciiSpace[s[i]] != 0 {
 				i++
 			}
@@ -372,6 +405,7 @@ func Fields(s string) []string {
 	}
 
 	// Some runes in the input string are not ASCII.
+	// 有些字符不是 ASCII ，使用 unicode.IsSpace 判断是否为空字符，然后统计
 	return FieldsFunc(s, unicode.IsSpace)
 }
 
@@ -383,6 +417,7 @@ func Fields(s string) []string {
 func FieldsFunc(s string, f func(rune) bool) []string {
 	// A span is used to record a slice of s of the form s[start:end].
 	// The start index is inclusive and the end index is exclusive.
+	// span 用来记录起始位置
 	type span struct {
 		start int
 		end   int
@@ -390,6 +425,7 @@ func FieldsFunc(s string, f func(rune) bool) []string {
 	spans := make([]span, 0, 32)
 
 	// Find the field start and end indices.
+	// 找空串拆分的字段
 	wasField := false
 	fromIndex := 0
 	for i, rune := range s {
@@ -412,6 +448,7 @@ func FieldsFunc(s string, f func(rune) bool) []string {
 	}
 
 	// Create strings from recorded field indices.
+	// 根据 span 记录生成字符串切片
 	a := make([]string, len(spans))
 	for i, span := range spans {
 		a[i] = s[span.start:span.end]
@@ -457,6 +494,7 @@ func HasSuffix(s, suffix string) bool {
 // Map returns a copy of the string s with all its characters modified
 // according to the mapping function. If mapping returns a negative value, the character is
 // dropped from the string with no replacement.
+// Map 返回字符串 s 的副本，其所有字符都根据映射函数进行了修改。如果映射返回负值，则从字符串中删除该字符而不进行替换。
 func Map(mapping func(rune) rune, s string) string {
 	// In the worst case, the string can grow when mapped, making
 	// things unpleasant. But it's so rare we barge in assuming it's
@@ -633,8 +671,10 @@ func ToTitleSpecial(c unicode.SpecialCase, s string) string {
 
 // isSeparator reports whether the rune could mark a word boundary.
 // TODO: update when package unicode captures more of the properties.
+// isSeparator 返回是否是分隔符
 func isSeparator(r rune) bool {
 	// ASCII alphanumerics and underscore are not separators
+	// ASCII 字母数字和下划线不是分隔符
 	if r <= 0x7F {
 		switch {
 		case '0' <= r && r <= '9':
@@ -660,6 +700,7 @@ func isSeparator(r rune) bool {
 // mapped to their title case.
 //
 // BUG(rsc): The rule Title uses for word boundaries does not handle Unicode punctuation properly.
+// Title 返回每个单词首字符大写
 func Title(s string) string {
 	// Use a closure here to remember state.
 	// Hackish but effective. Depends on Map scanning in order and calling
@@ -754,6 +795,7 @@ type asciiSet [8]uint32
 
 // makeASCIISet creates a set of ASCII characters and reports whether all
 // characters in chars are ASCII.
+// makeASCIISet 用户判断 chars 中所有字符是否均为ASCII。
 func makeASCIISet(chars string) (as asciiSet, ok bool) {
 	for i := 0; i < len(chars); i++ {
 		c := chars[i]
@@ -890,6 +932,7 @@ func ReplaceAll(s, old, new string) string {
 
 // EqualFold reports whether s and t, interpreted as UTF-8 strings,
 // are equal under Unicode case-folding.
+// 不区分大小写判断是否相等
 func EqualFold(s, t string) bool {
 	for s != "" && t != "" {
 		// Extract first rune from each string.
@@ -944,47 +987,64 @@ func EqualFold(s, t string) bool {
 }
 
 // Index returns the index of the first instance of substr in s, or -1 if substr is not present in s.
+// Index 返回 s 中 substr 的第一个的索引；如果 s 中不存在 substr ，则返回 -1 。
 func Index(s, substr string) int {
 	n := len(substr)
+	// 针对不同的长度，做不同的处理
 	switch {
 	case n == 0:
+		// 长度 0, 返回 0
 		return 0
 	case n == 1:
+		// 长度 1, 调用 IndexByte
 		return IndexByte(s, substr[0])
 	case n == len(s):
+		// 长度与 s 长度相等，直接字符串比较
 		if substr == s {
 			return 0
 		}
 		return -1
 	case n > len(s):
+		// 长度大于 s 长度，返回 -1
 		return -1
 	case n <= bytealg.MaxLen:
 		// Use brute force when s and substr both are small
+		// 当 s 和 substr 都较小时使用蛮力算法
 		if len(s) <= bytealg.MaxBruteForce {
 			return bytealg.IndexString(s, substr)
 		}
+		// c0,c1 分别为 substr 中第 1 个和第 2 个字符
 		c0 := substr[0]
 		c1 := substr[1]
 		i := 0
 		t := len(s) - n + 1
 		fails := 0
+		// 遍历 s
 		for i < t {
 			if s[i] != c0 {
 				// IndexByte is faster than bytealg.IndexString, so use it as long as
 				// we're not getting lots of false positives.
+				// IndexByte 比 bytealg.IndexString 快，所以使用它，并不会产生很多的 false positive。
+				// false positive: (假正, FP) 被模型预测为正的负样本 （就是认为找到的是正确的，其实不是的）。
+				// 如果第一个字符没有匹配，直接找下一个匹配第一个字符的下标，如果失败，返回 -1 ，成功则调整到此位置
 				o := IndexByte(s[i:t], c0)
 				if o < 0 {
 					return -1
 				}
 				i += o
 			}
+			// 如果前前两个字符都匹配成功了，尝试比较看看
 			if s[i+1] == c1 && s[i:i+n] == substr {
 				return i
 			}
+			// 累计错误次数， 就是前面没有匹配到
 			fails++
+			// 比较下一个
 			i++
 			// Switch to bytealg.IndexString when IndexByte produces too many false positives.
+			// 当IndexByte产生过多的 false positive 时，请切换到 bytealg.IndexString 。
 			if fails > bytealg.Cutover(i) {
+				// IndexString 汇编实现 src/internal/bytealg/index_amd64.s
 				r := bytealg.IndexString(s[i:], substr)
 				if r >= 0 {
 					return r + i
@@ -994,6 +1054,8 @@ func Index(s, substr string) int {
 		}
 		return -1
 	}
+	// 其他情况： n > bytealg.MaxLen
+	// c0,c1 分别为 substr 中第 1 个和第 2 个字符
 	c0 := substr[0]
 	c1 := substr[1]
 	i := 0
@@ -1012,6 +1074,7 @@ func Index(s, substr string) int {
 		}
 		i++
 		fails++
+		// 其他部分和 n <= bytealg.MaxLen，主要这里的判断，和算法不一样，这里使用 indexRabinKarp 算法
 		if fails >= 4+i>>4 && i < t {
 			// See comment in ../bytes/bytes_generic.go.
 			j := indexRabinKarp(s[i:], substr)
@@ -1024,22 +1087,28 @@ func Index(s, substr string) int {
 	return -1
 }
 
+// indexRabinKarp Rabin Karp 算法
 func indexRabinKarp(s, substr string) int {
 	// Rabin-Karp search
+	// 计算 substr 的 hash 和乘法因子
 	hashss, pow := hashStr(substr)
 	n := len(substr)
+	// 计算 s 中滑动窗口为 len(substr) 字符串的 hash
 	var h uint32
 	for i := 0; i < n; i++ {
 		h = h*primeRK + uint32(s[i])
 	}
+	// 尝试判断相等与否
 	if h == hashss && s[:n] == substr {
 		return 0
 	}
+	// 滑动窗口，每次移动一位
 	for i := n; i < len(s); {
-		h *= primeRK
-		h += uint32(s[i])
-		h -= pow * uint32(s[i-n])
+		h *= primeRK              // 相当于进位， primeRK 进制
+		h += uint32(s[i])         // 右边字符滑入
+		h -= pow * uint32(s[i-n]) // 左边字符滑出
 		i++
+		// 尝试判断相等与否
 		if h == hashss && s[i-n:i] == substr {
 			return i - n
 		}

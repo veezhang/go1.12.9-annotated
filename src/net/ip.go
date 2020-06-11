@@ -686,6 +686,7 @@ func ParseIP(s string) IP {
 
 // parseIPZone parses s as an IP address, return it and its associated zone
 // identifier (IPv6 only).
+// parseIPZone 将 s 解析为 IP 地址，返回它及其关联的区域标识符（仅IPv6）。
 func parseIPZone(s string) (IP, string) {
 	for i := 0; i < len(s); i++ {
 		switch s[i] {

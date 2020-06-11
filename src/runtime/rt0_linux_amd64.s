@@ -4,9 +4,9 @@
 
 #include "textflag.h"
 
-// 【linux amd64系统的启动函数】
+//  linux amd64 系统的启动函数
 TEXT _rt0_amd64_linux(SB),NOSPLIT,$-8
-	JMP	_rt0_amd64(SB)
+    JMP _rt0_amd64(SB) // 跳转到_rt0_amd64函数， 在 asm_amd64.s 中。
 
 TEXT _rt0_amd64_linux_lib(SB),NOSPLIT,$0
-	JMP	_rt0_amd64_lib(SB)
+    JMP _rt0_amd64_lib(SB)

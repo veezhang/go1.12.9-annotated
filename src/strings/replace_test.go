@@ -7,8 +7,9 @@ package strings_test
 import (
 	"bytes"
 	"fmt"
-	. "strings"
 	"testing"
+
+	. "strings"
 )
 
 var htmlEscaper = NewReplacer(

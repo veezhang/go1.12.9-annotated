@@ -14,10 +14,11 @@ import (
 // io.ByteScanner, and io.RuneScanner interfaces by reading
 // from a string.
 // The zero value for Reader operates like a Reader of an empty string.
+// Reader 通过从字符串中读取来实现io.Reader，io.ReaderAt，io.Seeker，io.WriterTo，io.ByteScanner 和 io.RuneScanner接口。 Reader 的零值类似于空字符串的 Reader 。
 type Reader struct {
 	s        string
-	i        int64 // current reading index
-	prevRune int   // index of previous rune; or < 0
+	i        int64 // current reading index // 当前读取下标索引
+	prevRune int   // index of previous rune; or < 0 // 上一个 rune 的下标
 }
 
 // Len returns the number of bytes of the unread portion of the

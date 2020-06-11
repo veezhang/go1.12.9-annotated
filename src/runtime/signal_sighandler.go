@@ -28,12 +28,16 @@ var testSigtrap func(info *siginfo, ctxt *sigctxt, gp *g) bool
 //
 // The garbage collector may have stopped the world, so write barriers
 // are not allowed.
+// 信号发生时调用 sighandler。 全局 g 将设置为 gsignal goroutine ， 并备用信号堆栈上运行。 参数 g 将是全局 g 在产生信号时的值。 
+//  sig, info 和 ctxt 参数是来自系统信号处理程序： 它们是将 SA 传递给 sigaction 系统调用时传递的参数。
+// 垃圾回收器可能已经 STW，因此不允许写屏障。
 //
 //go:nowritebarrierrec
 func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	_g_ := getg()
 	c := &sigctxt{info, ctxt}
 
+	// profile 定时
 	if sig == _SIGPROF {
 		sigprof(c.sigpc(), c.sigsp(), c.siglr(), gp, _g_.m)
 		return

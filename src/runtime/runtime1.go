@@ -57,14 +57,14 @@ func argv_index(argv **byte, i int32) *byte {
 	return *(**byte)(add(unsafe.Pointer(argv), uintptr(i)*sys.PtrSize))
 }
 
-//【设置参数】
+// 设置参数
 func args(c int32, v **byte) {
 	argc = c
 	argv = v
 	sysargs(c, v)
 }
 
-//【初始化参数, 保存到全局变量argslice中， 在src/runtime/runtime.go中】
+// 初始化参数, 保存到全局变量argslice中， 在src/runtime/runtime.go中
 func goargs() {
 	if GOOS == "windows" {
 		return
@@ -75,7 +75,7 @@ func goargs() {
 	}
 }
 
-//【初始环境变量, 保存到全局变量envs中， 在src/runtime/runtime.go中】
+// 初始环境变量, 保存到全局变量envs中， 在src/runtime/runtime.go中
 func goenvs_unix() {
 	// TODO(austin): ppc64 in dynamic linking mode doesn't
 	// guarantee env[] will immediately follow argv. Might cause
@@ -136,7 +136,7 @@ func testAtomic64() {
 	}
 }
 
-//【做一些数据检测】
+// 做一些数据检测
 func check() {
 	var (
 		a     int8

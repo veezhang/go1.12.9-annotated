@@ -2,16 +2,21 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// mutator： mutator就是改变者, 在GC里, 指的是改变对象之间引用关系的实体, 可以简单的理解为我们的应用程序(运行我们写的代码的线程, 协程)。
+
 // Garbage collector (GC).
 //
 // The GC runs concurrently with mutator threads, is type accurate (aka precise), allows multiple
 // GC thread to run in parallel. It is a concurrent mark and sweep that uses a write barrier. It is
 // non-generational and non-compacting. Allocation is done using size segregated per P allocation
 // areas to minimize fragmentation while eliminating locks in the common case.
+// GC和mutator并发运行，类型准确（也称为精确），允许多个GC线程并行运行。通过写屏障来并发标记-清除。它是非世代和非紧凑的。
+// 使用每个P分配大小隔离的span来完成分配，以最大程度地减少碎片，同时消除常见情况下的锁。
 //
 // The algorithm decomposes into several steps.
 // This is a high level description of the algorithm being used. For an overview of GC a good
 // place to start is Richard Jones' gchandbook.org.
+// 该算法分解为几个步骤。这是对所使用算法的高级描述。有关GC的概述，Richard Jones的gchandbook.org是一个不错的起点。
 //
 // The algorithm's intellectual heritage includes Dijkstra's on-the-fly algorithm, see
 // Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, and E. F. M. Steffens. 1978.
@@ -20,6 +25,7 @@
 // For journal quality proofs that these steps are complete, correct, and terminate see
 // Hudson, R., and Moss, J.E.B. Copying Garbage Collection without stopping the world.
 // Concurrency and Computation: Practice and Experience 15(3-5), 2003.
+// 一些参考文档吧
 //
 // 1. GC performs sweep termination.
 //
@@ -27,6 +33,9 @@
 //
 //    b. Sweep any unswept spans. There will only be unswept spans if
 //    this GC cycle was forced before the expected time.
+// 1.GC执行扫描终止。
+//   a.STW。这将导致所有的P达到GC安全点。
+//   b.扫扫所有未扫过的span。如果在预期时间之前强制执行此GC周期，则只有未扫描的span。
 //
 // 2. GC performs the mark phase.
 //
@@ -42,6 +51,8 @@
 //    overwritten pointer and the new pointer value for any pointer
 //    writes (see mbarrier.go for details). Newly allocated objects
 //    are immediately marked black.
+//   b.Start the world。从这一点出发，GC工作由调度员启动的标记工作人员以及作为分配一部分的协助完成。
+// 对于任何指针写入，写屏障都会覆盖重写的指针和新的指针值（有关详细信息，请参见mbarrier.go）。新分配的对象立即标记为黑色。
 //
 //    c. GC performs root marking jobs. This includes scanning all
 //    stacks, shading all globals, and shading any heap pointers in
@@ -57,6 +68,10 @@
 //    distributed termination algorithm to detect when there are no
 //    more root marking jobs or grey objects (see gcMarkDone). At this
 //    point, GC transitions to mark termination.
+// 2.GC执行标记阶段。
+//   a.将gcphase设置为_GCmark（来自_GCoff），启用写屏障，启用mutator辅助，并使入队根标记，准备标记阶段。
+// 在所有P都启用写屏障之前，无法扫描任何对象，这可以使用STW完成。
+//   b.Start the world。从这一点出发，GC工作由调度员启动的标记工作人员以及作为分配一部分的协助完成。对于任何指针写入，写屏障都会遮盖覆盖的指针和新的指针值（有关详细信息，请参见mbarrier.go）。 新分配的对象立即标记为黑色。
 //
 // 3. GC performs mark termination.
 //
@@ -251,12 +266,16 @@ var writeBarrier struct {
 // gcBlackenEnabled is 1 if mutator assists and background mark
 // workers are allowed to blacken objects. This must only be set when
 // gcphase == _GCmark.
+// 如果允许 mutator assists 和 background mark worker 将对象变黑，则 gcBlackenEnabled 为 1。 仅当 gcphase == _GCmark 时才可以设置该值。
 var gcBlackenEnabled uint32
 
 const (
-	_GCoff             = iota // GC not running; sweeping in background, write barrier disabled
-	_GCmark                   // GC marking roots and workbufs: allocate black, write barrier ENABLED
-	_GCmarktermination        // GC mark termination: allocate black, P's help GC, write barrier ENABLED
+	// GC未运行； 在后台扫描，禁用写屏障
+	_GCoff = iota // GC not running; sweeping in background, write barrier disabled
+	// GC标记roots和workbufs: 分配黑色的，启用写屏障
+	_GCmark // GC marking roots and workbufs: allocate black, write barrier ENABLED
+	// GC标记结束: 分配黑色的，P帮助GC，启用写屏障
+	_GCmarktermination // GC mark termination: allocate black, P's help GC, write barrier ENABLED
 )
 
 //go:nosplit
@@ -1133,27 +1152,32 @@ type gcTrigger struct {
 	n    uint32 // gcTriggerCycle: cycle number to start
 }
 
+//  GC 触发类型
 type gcTriggerKind int
 
 const (
 	// gcTriggerAlways indicates that a cycle should be started
 	// unconditionally, even if GOGC is off or we're in a cycle
 	// right now. This cannot be consolidated with other cycles.
+	// gcTriggerAlways指示即使 GOGC 已关闭或我们现在处于循环中，也应无条件启动循环。这不能与其他循环合并。
 	gcTriggerAlways gcTriggerKind = iota
 
 	// gcTriggerHeap indicates that a cycle should be started when
 	// the heap size reaches the trigger heap size computed by the
 	// controller.
+	// gcTriggerHeap 表示当堆大小达到控制器计算的触发堆大小时开始一个周期
 	gcTriggerHeap
 
 	// gcTriggerTime indicates that a cycle should be started when
 	// it's been more than forcegcperiod nanoseconds since the
 	// previous GC cycle.
+	// gcTriggerTime 表示自上一个 GC 周期后当循环超过 forcegcperiod (2分钟) 纳秒时应开始一个周期。
 	gcTriggerTime
 
 	// gcTriggerCycle indicates that a cycle should be started if
 	// we have not yet started cycle number gcTrigger.n (relative
 	// to work.cycles).
+	// gcTriggerCycle 表示如果我们还没有启动第 gcTrigger.n 个周期（相对于 work.cycles ）时应开始一个周期。
 	gcTriggerCycle
 )
 
@@ -1977,10 +2001,13 @@ func gcBgMarkWorker(_p_ *p) {
 // gcMarkWorkAvailable reports whether executing a mark worker
 // on p is potentially useful. p may be nil, in which case it only
 // checks the global sources of work.
+//  gcMarkWorkAvailable 报告在 p 上执行 mark 工作程序是否可能有用。 p 可能为 nil ，在这种情况下，它仅检查全局工作任务。
 func gcMarkWorkAvailable(p *p) bool {
+	// 如果 p != nil 并且本地的任务不为空
 	if p != nil && !p.gcw.empty() {
 		return true
 	}
+	// 如果全局不会空
 	if !work.full.empty() {
 		return true // global work available
 	}
