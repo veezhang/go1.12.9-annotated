@@ -1422,23 +1422,28 @@ func (t *Type) IsUntyped() bool {
 // TODO(austin): We probably only need HasHeapPointer. See
 // golang.org/cl/73412 for discussion.
 
+// Haspointers 判断类型是否有指针（不忽略栈指针）
 func Haspointers(t *Type) bool {
 	return Haspointers1(t, false)
 }
 
+// Haspointers1 为 Haspointers 的具体实现。全局函数 Haspointers 的时候 ignoreNotInHeap = false ；Type 成员函数的时候 ignoreNotInHeap = true 。
 func Haspointers1(t *Type, ignoreNotInHeap bool) bool {
 	switch t.Etype {
 	case TINT, TUINT, TINT8, TUINT8, TINT16, TUINT16, TINT32, TUINT32, TINT64,
 		TUINT64, TUINTPTR, TFLOAT32, TFLOAT64, TCOMPLEX64, TCOMPLEX128, TBOOL, TSSA:
+		// 基础类型（数字，bool，TSSA ）没有指针
 		return false
 
 	case TARRAY:
+		// 数组： 没有元素则没有指针，否则看具体元素是否有指针
 		if t.NumElem() == 0 { // empty array has no pointers
 			return false
 		}
 		return Haspointers1(t.Elem(), ignoreNotInHeap)
 
 	case TSTRUCT:
+		// 结构体： 查看每个字段是否含有指针
 		for _, t1 := range t.Fields().Slice() {
 			if Haspointers1(t1.Type, ignoreNotInHeap) {
 				return true
@@ -1447,9 +1452,11 @@ func Haspointers1(t *Type, ignoreNotInHeap bool) bool {
 		return false
 
 	case TPTR, TSLICE:
+		// 指针，切片： 主要关注是否在栈上
 		return !(ignoreNotInHeap && t.Elem().NotInHeap())
 
 	case TTUPLE:
+		// tuple 判断两个字段 first 和 second 是否含有指针
 		ttup := t.Extra.(*Tuple)
 		return Haspointers1(ttup.first, ignoreNotInHeap) || Haspointers1(ttup.second, ignoreNotInHeap)
 	}
@@ -1460,6 +1467,7 @@ func Haspointers1(t *Type, ignoreNotInHeap bool) bool {
 // HasHeapPointer reports whether t contains a heap pointer.
 // This is used for write barrier insertion, so it ignores
 // pointers to go:notinheap types.
+// HasHeapPointer 判断类型是否有堆上的指针
 func (t *Type) HasHeapPointer() bool {
 	return Haspointers1(t, true)
 }

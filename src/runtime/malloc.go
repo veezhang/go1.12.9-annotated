@@ -902,6 +902,7 @@ retry:
 }
 
 // base address for all 0-byte allocations
+// 基础地址：给所有 0 字节的类型
 var zerobase uintptr
 
 // nextFreeFast returns the next free object if one is quickly available.

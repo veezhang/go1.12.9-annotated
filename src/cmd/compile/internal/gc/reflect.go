@@ -884,6 +884,7 @@ func dcommontype(lsym *obj.LSym, t *types.Type) int {
 	ot = duint8(lsym, ot, t.Align) // fieldAlign
 
 	i = kinds[t.Etype]
+	// 如果没有堆上的指针，则标记 KindNoPointers
 	if !types.Haspointers(t) {
 		i |= objabi.KindNoPointers
 	}
