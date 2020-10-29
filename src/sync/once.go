@@ -9,9 +9,10 @@ import (
 )
 
 // Once is an object that will perform exactly one action.
+// Once 对象可以保证一个动作的绝对一次执行。
 type Once struct {
 	m    Mutex
-	done uint32
+	done uint32 // done 表明某个动作是否被执行，由于其使用频繁，在新版本中放在结构体的最上方
 }
 
 // Do calls the function f if and only if Do is being called for the
@@ -33,12 +34,14 @@ type Once struct {
 // without calling f.
 //
 func (o *Once) Do(f func()) {
+	// 如果已经做过了，直接返回
 	if atomic.LoadUint32(&o.done) == 1 {
 		return
 	}
 	// Slow-path.
 	o.m.Lock()
 	defer o.m.Unlock()
+	// 锁住后二次检测
 	if o.done == 0 {
 		defer atomic.StoreUint32(&o.done, 1)
 		f()
