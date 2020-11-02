@@ -18,14 +18,16 @@ import (
 // when calling the Wait method.
 //
 // A Cond must not be copied after first use.
+// Cond 实现条件变量，每一个 Cond 有一个关联的 Locker L （通常是 *Mutex ，*RWMutex）
+//
 type Cond struct {
 	noCopy noCopy
 
 	// L is held while observing or changing the condition
-	L Locker
+	L Locker // 关联的 Locker
 
-	notify  notifyList
-	checker copyChecker
+	notify  notifyList  // 通知队列
+	checker copyChecker // 复制检测器
 }
 
 // NewCond returns a new Cond with Locker l.
@@ -49,6 +51,7 @@ func NewCond(l Locker) *Cond {
 //    ... make use of condition ...
 //    c.L.Unlock()
 //
+// Wait 原子式的 unlock c.L， 并暂停执行调用的 goroutine。
 func (c *Cond) Wait() {
 	c.checker.check()
 	t := runtime_notifyListAdd(&c.notify)
@@ -61,6 +64,7 @@ func (c *Cond) Wait() {
 //
 // It is allowed but not required for the caller to hold c.L
 // during the call.
+// Signal 唤醒一个等待 c 的 goroutine（如果存在），在调用时它可以（不必须）持有一个 c.L
 func (c *Cond) Signal() {
 	c.checker.check()
 	runtime_notifyListNotifyOne(&c.notify)
@@ -70,12 +74,14 @@ func (c *Cond) Signal() {
 //
 // It is allowed but not required for the caller to hold c.L
 // during the call.
+// Broadcast 唤醒等待 c 的所有 goroutine ，调用时它可以（不必须）持久有个 c.L
 func (c *Cond) Broadcast() {
 	c.checker.check()
 	runtime_notifyListNotifyAll(&c.notify)
 }
 
 // copyChecker holds back pointer to itself to detect object copying.
+// copyChecker 保存指向自身的指针来检测对象的复制行为。
 type copyChecker uintptr
 
 func (c *copyChecker) check() {

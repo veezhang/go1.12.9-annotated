@@ -26,6 +26,7 @@ func runtime_Semrelease(s *uint32, handoff bool)
 
 // Approximation of notifyList in runtime/sema.go. Size and alignment must
 // agree.
+// 在 runtime/sema.go 中
 type notifyList struct {
 	wait   uint32
 	notify uint32
