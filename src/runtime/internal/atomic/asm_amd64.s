@@ -18,8 +18,11 @@ TEXT runtime∕internal∕atomic·Cas(SB),NOSPLIT,$0-17
 	MOVQ	ptr+0(FP), BX
 	MOVL	old+8(FP), AX
 	MOVL	new+12(FP), CX
+	// LOCK 是指令前缀，会设置处理器的LOCK#信号（这个信号会使总线锁定，阻止其他处理器接管总线访问内存），
+	// 直到使用LOCK前缀的指令执行结束，这会紧随之后的一条指令执行变为原子操作。在多处理器环境下，设置LOCK#
+	// 信号能保证某个处理器对共享内存的独占使用。
 	LOCK
-	CMPXCHGL	CX, 0(BX)
+	CMPXCHGL	CX, 0(BX) // Compare and Exchange
 	SETEQ	ret+16(FP)
 	RET
 
