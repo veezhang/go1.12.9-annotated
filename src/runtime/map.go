@@ -95,9 +95,9 @@ const (
 	// tophash 可能的值，以下是一些特殊标记，只有在 evacuate() 函数期间才有 evacuated* 值
 	// emptyRest 		此单元格为空，并且高索引和overflows也没有非空单元格可
 	// emptyOne 		此单元格为空
-	// evacuatedX
-	// evacuatedY
-	// evacuatedEmpty
+	// evacuatedX		此单元格已经迁移了，进行的是平移迁移，也就是迁移到相同的下标下
+	// evacuatedY		此单元格已经迁移了，进行的是向后迁移，也就是迁移到相同的下标后面
+	// evacuatedEmpty	此单元格已经迁移了，原来的没有 emptyOne
 	// minTopHash 		tophash 最小的值
 	emptyRest      = 0 // this cell is empty, and there are no more non-empty cells at higher indexes or overflows.
 	emptyOne       = 1 // this cell is empty
@@ -110,7 +110,7 @@ const (
 	iterator     = 1 // there may be an iterator using buckets						// 可能在迭代 buckets
 	oldIterator  = 2 // there may be an iterator using oldbuckets					// 可能在迭代 oldbuckets
 	hashWriting  = 4 // a goroutine is writing to the map							// 有 goroutine 在写 map
-	sameSizeGrow = 8 // the current map growth is to a new map of the same size		// 等大小扩容
+	sameSizeGrow = 8 // the current map growth is to a new map of the same size		// 相同大小的扩容，扩容前后哈希桶数量相等，空的k/v太多了，做清理
 
 	// sentinel bucket ID for iterator checks
 	noCheck = 1<<(8*sys.PtrSize) - 1 // 哨兵标志
@@ -150,6 +150,9 @@ type mapextra struct {
 	// overflow and oldoverflow are only used if key and value do not contain pointers.
 	// overflow contains overflow buckets for hmap.buckets.
 	// oldoverflow contains overflow buckets for hmap.oldbuckets.
+	// 如果 key 和 value 都不包含指针，并且可以 inline (<=128字节)，那么就标记 bucket(bmap) 为没有指针的类型，这样就可以
+	// 避免 GC 扫描整个 map 。然而 bmap.overflow 也是一个指针，所以就将其放到 hmap.extra.overflow 和 hmap.extra.oldoverflow
+	// 中，来保持引用，不会被 GC 回收了。
 	// 当kev/value不为指针时，溢出桶存放到mapextra结构中，overflow存放buckets中的溢出桶，oldoverflow存放oldbuckets中的溢出桶
 	overflow    *[]*bmap // 以切片形式存放buckets中的每个溢出桶
 	oldoverflow *[]*bmap // 以切片形式存放oldbuckets中的每个溢出桶
@@ -184,21 +187,22 @@ type bmap struct {
 // the layout of this structure.
 // 迭代器
 type hiter struct {
+	// key, value 必须在第一和第二个字段，在 cmd/compile/internal/gc/range.go 中会这么来获取 key value
 	key         unsafe.Pointer // Must be in first position.  Write nil to indicate iteration end (see cmd/internal/gc/range.go).
 	value       unsafe.Pointer // Must be in second position (see cmd/internal/gc/range.go).
-	t           *maptype
-	h           *hmap
-	buckets     unsafe.Pointer // bucket ptr at hash_iter initialization time
-	bptr        *bmap          // current bucket
-	overflow    *[]*bmap       // keeps overflow buckets of hmap.buckets alive
-	oldoverflow *[]*bmap       // keeps overflow buckets of hmap.oldbuckets alive
-	startBucket uintptr        // bucket iteration started at
-	offset      uint8          // intra-bucket offset to start from during iteration (should be big enough to hold bucketCnt-1)
-	wrapped     bool           // already wrapped around from end of bucket array to beginning
-	B           uint8
-	i           uint8
-	bucket      uintptr
-	checkBucket uintptr
+	t           *maptype       // map 类型
+	h           *hmap          // 对应的 map
+	buckets     unsafe.Pointer // bucket ptr at hash_iter initialization time 		// 初始化的时候设置的 buckets
+	bptr        *bmap          // current bucket									// 当前的 bucket
+	overflow    *[]*bmap       // keeps overflow buckets of hmap.buckets alive		// 让 hmap.buckets alive
+	oldoverflow *[]*bmap       // keeps overflow buckets of hmap.oldbuckets alive	// 让 hmap.buckets alive
+	startBucket uintptr        // bucket iteration started at						// 开始的 bucket
+	offset      uint8          // intra-bucket offset to start from during iteration (should be big enough to hold bucketCnt-1) // bucket 内偏移
+	wrapped     bool           // already wrapped around from end of bucket array to beginning // 是否以及从最后遍历到前面来了，以及绕回来了
+	B           uint8          // B
+	i           uint8          // i
+	bucket      uintptr        // bucket 位置
+	checkBucket uintptr        // checkBucket
 }
 
 // bucketShift returns 1<<b, optimized for code generation.
@@ -226,7 +230,7 @@ func tophash(hash uintptr) uint8 {
 	return top
 }
 
-// evacuated 判断是否正在迁移
+// evacuated 判断是否已经迁移
 func evacuated(b *bmap) bool {
 	h := b.tophash[0]
 	return h > emptyOne && h < minTopHash
@@ -500,7 +504,7 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 		}
 		// 计算之前的哈希桶
 		oldb := (*bmap)(add(c, (hash&m)*uintptr(t.bucketsize)))
-		// 如果还没有迁移，则 b = oldb
+		// 如果还没有迁移过，则 b = oldb
 		if !evacuated(oldb) {
 			b = oldb
 		}
@@ -805,7 +809,7 @@ done:
 	if h.flags&hashWriting == 0 {
 		throw("concurrent map writes")
 	}
-	// &^ 是 bit clear ，清除 hashWriting 中为 1 的位，也就是清除 hashWriting 标记
+	// &^ 是 bit clear ，清除 flags 中hashWriting 中为 1 的位，也就是清除 hashWriting 标记
 	h.flags &^= hashWriting
 	if t.indirectvalue() {
 		// val 是指针类型，解指针，获取对应的值
@@ -952,7 +956,7 @@ search:
 	if h.flags&hashWriting == 0 {
 		throw("concurrent map writes")
 	}
-	// &^ 是 bit clear ，清除 hashWriting 中为 1 的位，也就是清除 hashWriting 标记
+	// &^ 是 bit clear ，清除 flags 中 hashWriting 中为 1 的位，也就是清除 hashWriting 标记
 	h.flags &^= hashWriting
 }
 
@@ -960,12 +964,14 @@ search:
 // The hiter struct pointed to by 'it' is allocated on the stack
 // by the compilers order pass or on the heap by reflect_mapiterinit.
 // Both need to have zeroed hiter since the struct contains pointers.
+// mapiterinit 初始化 hiter 结构体，用来 for :=range m 使用。
+// 指向 hiter 的 it 通过编译器在栈上分配，或者通过 reflect_mapiterinit 在堆上分配，都需要清零。
 func mapiterinit(t *maptype, h *hmap, it *hiter) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapiterinit))
 	}
-
+	// map 为空，返回
 	if h == nil || h.count == 0 {
 		return
 	}
@@ -977,6 +983,7 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 	it.h = h
 
 	// grab snapshot of bucket state
+	// 创建当前 map 状态快照
 	it.B = h.B
 	it.buckets = h.buckets
 	if t.bucket.kind&kindNoPointers != 0 {
@@ -984,40 +991,49 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 		// This preserves all relevant overflow buckets alive even if
 		// the table grows and/or overflow buckets are added to the table
 		// while we are iterating.
+		// 分配当前切片并将指针记住到当前和老的。
+		// 这将使得所有相关的溢出桶 alive ，即使在迭代的时候 map 扩容、添加溢出桶。
 		h.createOverflow()
 		it.overflow = h.extra.overflow
 		it.oldoverflow = h.extra.oldoverflow
 	}
 
 	// decide where to start
+	// 决定从哪里开始，生产随机数
 	r := uintptr(fastrand())
 	if h.B > 31-bucketCntBits {
 		r += uintptr(fastrand()) << 31
 	}
+	// 开始遍历的 bucket 以及 bucket 中的 offset
 	it.startBucket = r & bucketMask(h.B)
 	it.offset = uint8(r >> h.B & (bucketCnt - 1))
 
 	// iterator state
+	// 迭代状态
 	it.bucket = it.startBucket
 
 	// Remember we have an iterator.
 	// Can run concurrently with another mapiterinit().
+	// 以及有一个迭代，可以并发 mapiterinit
 	if old := h.flags; old&(iterator|oldIterator) != iterator|oldIterator {
 		atomic.Or8(&h.flags, iterator|oldIterator)
 	}
-
+	// 迭代下一个
 	mapiternext(it)
 }
 
+// 迭代下一个
 func mapiternext(it *hiter) {
 	h := it.h
 	if raceenabled {
 		callerpc := getcallerpc()
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapiternext))
 	}
+	// 并发迭代与写
 	if h.flags&hashWriting != 0 {
 		throw("concurrent map iteration and map write")
 	}
+	// 初始值
 	t := it.t
 	bucket := it.bucket
 	b := it.bptr
@@ -1026,9 +1042,12 @@ func mapiternext(it *hiter) {
 	alg := t.key.alg
 
 next:
+	//
 	if b == nil {
+		// 判断是否已经循环遍历所有的 bucket
 		if bucket == it.startBucket && it.wrapped {
 			// end of iteration
+			// 结束迭代
 			it.key = nil
 			it.value = nil
 			return
@@ -1040,13 +1059,17 @@ next:
 			// bucket and only return the ones that will be migrated to this bucket.
 			oldbucket := bucket & it.h.oldbucketmask()
 			b = (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize)))
+			// b 是否已经迁移
 			if !evacuated(b) {
+				// 还没有迁移
 				checkBucket = bucket
 			} else {
+				// 已经迁移过，需要重新计算 b
 				b = (*bmap)(add(it.buckets, bucket*uintptr(t.bucketsize)))
 				checkBucket = noCheck
 			}
 		} else {
+			// 没有在迁移 或者
 			b = (*bmap)(add(it.buckets, bucket*uintptr(t.bucketsize)))
 			checkBucket = noCheck
 		}
@@ -1057,18 +1080,26 @@ next:
 		}
 		i = 0
 	}
+	// 遍历哈希桶 8 个位置
 	for ; i < bucketCnt; i++ {
 		offi := (i + it.offset) & (bucketCnt - 1)
+		// 跳过空位置
 		if isEmpty(b.tophash[offi]) || b.tophash[offi] == evacuatedEmpty {
 			// TODO: emptyRest is hard to use here, as we start iterating
 			// in the middle of a bucket. It's feasible, just tricky.
+			// emptyRest 在这里不好使用，因为我们在 bucket 中间开始迭代的。
 			continue
 		}
+		// 获取 key
 		k := add(unsafe.Pointer(b), dataOffset+uintptr(offi)*uintptr(t.keysize))
 		if t.indirectkey() {
+			// k 是指针类型，解指针，获取对应的值
 			k = *((*unsafe.Pointer)(k))
 		}
+		// 获取 value
 		v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+uintptr(offi)*uintptr(t.valuesize))
+
+		// 过滤不会被迁移过来的数据
 		if checkBucket != noCheck && !h.sameSizeGrow() {
 			// Special case: iterator was started during a grow to a larger size
 			// and the grow is not done yet. We're working on a bucket whose
@@ -1103,8 +1134,12 @@ next:
 			// OR
 			// key!=key, so the entry can't be deleted or updated, so we can just return it.
 			// That's lucky for us because when key!=key we can't look it up successfully.
+			// 两中情况可以直接返回：
+			// 1. 数据没有迁移
+			// 2. key != key ，因此不能删除也不能更新
 			it.key = k
 			if t.indirectvalue() {
+				// v 是指针类型，解指针，获取对应的值
 				v = *((*unsafe.Pointer)(v))
 			}
 			it.value = v
@@ -1116,8 +1151,10 @@ next:
 			// has been deleted, updated, or deleted and reinserted.
 			// NOTE: we need to regrab the key as it has potentially been
 			// updated to an equal() but not identical key (e.g. +0.0 vs -0.0).
+			// 自从迭代器启动后，map已经扩容，key 对应的数据已经在其他地方了。 重新在 map 中查找。
 			rk, rv := mapaccessK(t, h, k)
 			if rk == nil {
+				// 已经被删除
 				continue // key has been deleted
 			}
 			it.key = rk
@@ -1131,12 +1168,14 @@ next:
 		it.checkBucket = checkBucket
 		return
 	}
+	// 继续遍历其他的溢出桶
 	b = b.overflow(t)
 	i = 0
 	goto next
 }
 
 // mapclear deletes all keys from a map.
+// mapclear 清空 map
 func mapclear(t *maptype, h *hmap) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
@@ -1144,14 +1183,15 @@ func mapclear(t *maptype, h *hmap) {
 		racewritepc(unsafe.Pointer(h), callerpc, pc)
 	}
 
+	// h 为空，返回
 	if h == nil || h.count == 0 {
 		return
 	}
-
+	// 并发写
 	if h.flags&hashWriting != 0 {
 		throw("concurrent map writes")
 	}
-
+	// 设置 hashWriting 标志
 	h.flags ^= hashWriting
 
 	h.flags &^= sameSizeGrow
@@ -1161,6 +1201,7 @@ func mapclear(t *maptype, h *hmap) {
 	h.count = 0
 
 	// Keep the mapextra allocation but clear any extra information.
+	// 清除 mapextra
 	if h.extra != nil {
 		*h.extra = mapextra{}
 	}
@@ -1168,36 +1209,47 @@ func mapclear(t *maptype, h *hmap) {
 	// makeBucketArray clears the memory pointed to by h.buckets
 	// and recovers any overflow buckets by generating them
 	// as if h.buckets was newly alloced.
+	// makeBucketArray 清空 h.buckets 指向的内存，并且恢复所有溢出桶，就好像新分配了 h.buckets 一样。
+	// 分配 buckets
 	_, nextOverflow := makeBucketArray(t, h.B, h.buckets)
+	// 如果有多余的，设置到 nextOverflow
 	if nextOverflow != nil {
 		// If overflow buckets are created then h.extra
 		// will have been allocated during initial bucket creation.
 		h.extra.nextOverflow = nextOverflow
 	}
 
+	// 并发写
 	if h.flags&hashWriting == 0 {
 		throw("concurrent map writes")
 	}
+	// &^ 是 bit clear ，清除 flags 中 hashWriting 中为 1 的位，也就是清除 hashWriting 标记
 	h.flags &^= hashWriting
 }
 
+// map 扩容
 func hashGrow(t *maptype, h *hmap) {
 	// If we've hit the load factor, get bigger.
 	// Otherwise, there are too many overflow buckets,
 	// so keep the same number of buckets and "grow" laterally.
+	// 如果达到了负载因子，则翻倍扩容，否则相同大小大小扩容 sameSizeGrow 。
 	bigger := uint8(1)
 	if !overLoadFactor(h.count+1, h.B) {
 		bigger = 0
 		h.flags |= sameSizeGrow
 	}
 	oldbuckets := h.buckets
+	// 申请一个大数组，作为新的buckets
 	newbuckets, nextOverflow := makeBucketArray(t, h.B+bigger, nil)
 
+	// flags 为清除 iterator 和 oldIterator 状态后的值
 	flags := h.flags &^ (iterator | oldIterator)
+	// 如果之前有 iterator 状态， 则更新为 oldIterator 状态
 	if h.flags&iterator != 0 {
 		flags |= oldIterator
 	}
 	// commit the grow (atomic wrt gc)
+	// 提交扩容，更新字段
 	h.B += bigger
 	h.flags = flags
 	h.oldbuckets = oldbuckets
@@ -1207,12 +1259,14 @@ func hashGrow(t *maptype, h *hmap) {
 
 	if h.extra != nil && h.extra.overflow != nil {
 		// Promote current overflow buckets to the old generation.
+		// 将当前溢出桶提升到老一代
 		if h.extra.oldoverflow != nil {
 			throw("oldoverflow is not nil")
 		}
 		h.extra.oldoverflow = h.extra.overflow
 		h.extra.overflow = nil
 	}
+	// 跟新 nextOverflow
 	if nextOverflow != nil {
 		if h.extra == nil {
 			h.extra = new(mapextra)
@@ -1222,6 +1276,7 @@ func hashGrow(t *maptype, h *hmap) {
 
 	// the actual copying of the hash table data is done incrementally
 	// by growWork() and evacuate().
+	// 实际的迁移工作是在 growWork() 和 evacuate() 中完成的
 }
 
 // overLoadFactor reports whether count items placed in 1<<B buckets is over loadFactor.
@@ -1233,6 +1288,9 @@ func overLoadFactor(count int, B uint8) bool {
 // tooManyOverflowBuckets reports whether noverflow buckets is too many for a map with 1<<B buckets.
 // Note that most of these overflow buckets must be in sparse use;
 // if use was dense, then we'd have already triggered regular map growth.
+// tooManyOverflowBuckets 判断溢出桶的数量对于 1<<B 个桶来说是否过多
+// 注意，这些溢出桶中的大多数必须处于稀疏状态；如果使用密集，那么我们已经触发了常规 map 扩容。
+// 如果 noverflow >= 哈希桶数 ，则认为过多， >= 1<<B 也算
 func tooManyOverflowBuckets(noverflow uint16, B uint8) bool {
 	// If the threshold is too low, we do extraneous work.
 	// If the threshold is too high, maps that grow and shrink can hold on to lots of unused memory.
@@ -1278,21 +1336,24 @@ func growWork(t *maptype, h *hmap, bucket uintptr) {
 	// make sure we evacuate the oldbucket corresponding
 	// to the bucket we're about to use
 	// 确保 bucket 对应的 oldbucket 已经迁移完了，因为要开始使用 bucket 了
+	// 这里是要操作 bucket 了，先把这个先迁移
 	evacuate(t, h, bucket&h.oldbucketmask())
 
 	// evacuate one more oldbucket to make progress on growing
-	// 如果还在扩容中，则再迁移一个
+	// 如果还在扩容中，再顺带搬迁一个bucket
 	if h.growing() {
 		evacuate(t, h, h.nevacuate)
 	}
 }
 
+// bucket 判断是否已经迁移
 func bucketEvacuated(t *maptype, h *hmap, bucket uintptr) bool {
 	b := (*bmap)(add(h.oldbuckets, bucket*uintptr(t.bucketsize)))
 	return evacuated(b)
 }
 
 // evacDst is an evacuation destination.
+// evacDst 迁移目的地结构
 type evacDst struct {
 	b *bmap          // current destination bucket
 	i int            // key/val index into b
@@ -1304,31 +1365,36 @@ type evacDst struct {
 func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 	b := (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize)))
 	newbit := h.noldbuckets()
+	// evacuated 判断是否已经迁移过了
 	if !evacuated(b) {
 		// TODO: reuse overflow buckets instead of using new ones, if there
 		// is no iterator using the old buckets.  (If !oldIterator.)
 
 		// xy contains the x and y (low and high) evacuation destinations.
+		// x 为迁移到之前相同的位置； y 为翻倍扩容的时候，扩容到高于原始索引的位置。
 		var xy [2]evacDst
 		x := &xy[0]
-		x.b = (*bmap)(add(h.buckets, oldbucket*uintptr(t.bucketsize)))
+		x.b = (*bmap)(add(h.buckets, oldbucket*uintptr(t.bucketsize))) // oldbucket 平移迁移，还是原来的位置
 		x.k = add(unsafe.Pointer(x.b), dataOffset)
 		x.v = add(x.k, bucketCnt*uintptr(t.keysize))
 
 		if !h.sameSizeGrow() {
 			// Only calculate y pointers if we're growing bigger.
 			// Otherwise GC can see bad pointers.
+			// 仅当翻倍扩容的时候才计算 y ，否则 GC 可以看到坏指针。
 			y := &xy[1]
-			y.b = (*bmap)(add(h.buckets, (oldbucket+newbit)*uintptr(t.bucketsize)))
+			y.b = (*bmap)(add(h.buckets, (oldbucket+newbit)*uintptr(t.bucketsize))) // oldbucket 向后迁移，需要加 newbit
 			y.k = add(unsafe.Pointer(y.b), dataOffset)
 			y.v = add(y.k, bucketCnt*uintptr(t.keysize))
 		}
-
+		// 遍历哈希桶和对应的溢出桶（也是哈希桶）
 		for ; b != nil; b = b.overflow(t) {
 			k := add(unsafe.Pointer(b), dataOffset)
 			v := add(k, bucketCnt*uintptr(t.keysize))
+			// 遍历哈希桶 8 个位置
 			for i := 0; i < bucketCnt; i, k, v = i+1, add(k, uintptr(t.keysize)), add(v, uintptr(t.valuesize)) {
 				top := b.tophash[i]
+				// 如果为空，则设置为 evacuatedEmpty
 				if isEmpty(top) {
 					b.tophash[i] = evacuatedEmpty
 					continue
@@ -1338,12 +1404,14 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 				}
 				k2 := k
 				if t.indirectkey() {
+					// k 是指针类型
 					k2 = *((*unsafe.Pointer)(k2))
 				}
 				var useY uint8
 				if !h.sameSizeGrow() {
 					// Compute hash to make our evacuation decision (whether we need
 					// to send this key/value to bucket x or bucket y).
+					// 翻倍扩容，计算哈希值
 					hash := t.key.alg.hash(k2, uintptr(h.hash0))
 					if h.flags&iterator != 0 && !t.reflexivekey() && !t.key.alg.equal(k2, k2) {
 						// If key != key (NaNs), then the hash could be (and probably
@@ -1357,10 +1425,16 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 						// We recompute a new random tophash for the next level so
 						// these keys will get evenly distributed across all buckets
 						// after multiple grows.
-						useY = top & 1
+						// 如果 key != key  ，则哈希值与就哈希值完全不同。并且是不可复制的(!t.reflexivekey())。
+						// 在迭代情况下，需要满足可以复制性，所以我们的迁移决策必须匹配迭代模式的。
+						// 幸运的是，我们可以自由的迁移 key 。让 tophash 的低位来决策迁移。
+						// 我们为下一个级别重新计算了一个随机的 tophash  ，因此在多次增长之后，这些密钥将在所有存储桶中平均分配。
+						useY = top & 1 // 用低位来决策迁移
 						top = tophash(hash)
 					} else {
-						if hash&newbit != 0 {
+						// 比如 4 迁移到 8 的时候 ，newbit = 0100
+						// hash&newbit == 0 则平移迁移 ，否则向后迁移(这时候需要使用 y)
+						if hash&newbit != 0 { // 用高位来决策迁移
 							useY = 1
 						}
 					}
@@ -1369,27 +1443,34 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 				if evacuatedX+1 != evacuatedY || evacuatedX^1 != evacuatedY {
 					throw("bad evacuatedN")
 				}
-
+				// 存储 tophash 状态， dst 为迁移的目的地
 				b.tophash[i] = evacuatedX + useY // evacuatedX + 1 == evacuatedY
 				dst := &xy[useY]                 // evacuation destination
 
+				// 当前的 dst 空间不够了，新生成一个溢出桶
 				if dst.i == bucketCnt {
 					dst.b = h.newoverflow(t, dst.b)
 					dst.i = 0
 					dst.k = add(unsafe.Pointer(dst.b), dataOffset)
 					dst.v = add(dst.k, bucketCnt*uintptr(t.keysize))
 				}
+				// 设置 dst.b 的 tophash
 				dst.b.tophash[dst.i&(bucketCnt-1)] = top // mask dst.i as an optimization, to avoid a bounds check
 				if t.indirectkey() {
+					// k 是指针类型，设置指针
 					*(*unsafe.Pointer)(dst.k) = k2 // copy pointer
 				} else {
+					// k 不是指针类型，内存拷贝
 					typedmemmove(t.key, dst.k, k) // copy value
 				}
 				if t.indirectvalue() {
+					// v 是指针类型，设置指针
 					*(*unsafe.Pointer)(dst.v) = *(*unsafe.Pointer)(v)
 				} else {
+					// v 不是指针类型，内存拷贝
 					typedmemmove(t.elem, dst.v, v)
 				}
+				// 继续下一个
 				dst.i++
 				// These updates might push these pointers past the end of the
 				// key or value arrays.  That's ok, as we have the overflow pointer
@@ -1400,32 +1481,39 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 			}
 		}
 		// Unlink the overflow buckets & clear key/value to help GC.
+		// 接触溢出桶的链接，
 		if h.flags&oldIterator == 0 && t.bucket.kind&kindNoPointers == 0 {
 			b := add(h.oldbuckets, oldbucket*uintptr(t.bucketsize))
 			// Preserve b.tophash because the evacuation
 			// state is maintained there.
+			// 保留 b.tophash ，因为迁移状态在这里维护
 			ptr := add(b, dataOffset)
 			n := uintptr(t.bucketsize) - dataOffset
 			memclrHasPointers(ptr, n)
 		}
 	}
 
+	// 如果迁移的是 nevacuate 的地方 ，则表示我们需要尝试把 nevacuate 往后移了，看看是否是已经迁移过了
 	if oldbucket == h.nevacuate {
 		advanceEvacuationMark(h, t, newbit)
 	}
 }
 
 func advanceEvacuationMark(h *hmap, t *maptype, newbit uintptr) {
+	// 对迁移进度 hmap.nevacuate 进行累积计数
 	h.nevacuate++
 	// Experiments suggest that 1024 is overkill by at least an order of magnitude.
 	// Put it in there as a safeguard anyway, to ensure O(1) behavior.
+	// 一次最多统计 1024 个，太多了影响性能
 	stop := h.nevacuate + 1024
 	if stop > newbit {
 		stop = newbit
 	}
+	// bucketEvacuated 判断是否已经迁移了，如果迁移了，则 h.nevacuate++
 	for h.nevacuate != stop && bucketEvacuated(t, h, h.nevacuate) {
 		h.nevacuate++
 	}
+	// 在所有的旧桶都被分流后清空哈希的 oldbuckets 和 oldoverflow 字段
 	if h.nevacuate == newbit { // newbit == # of oldbuckets
 		// Growing is all done. Free old main bucket array.
 		h.oldbuckets = nil
@@ -1544,5 +1632,6 @@ func reflect_ismapkey(t *_type) bool {
 	return ismapkey(t)
 }
 
+// key 不存在的时候，并且 value 的内存大小 <= 1024 ，返回这个
 const maxZero = 1024 // must match value in cmd/compile/internal/gc/walk.go
 var zeroVal [maxZero]byte
