@@ -108,10 +108,12 @@ func walkselect(sel *Node) {
 }
 
 func walkselectcases(cases *Nodes) []*Node {
+	// 获取 case 操作的数量
 	n := cases.Len()
 	sellineno := lineno
 
 	// optimization: zero-case select
+	// 没有任何 case 的 select 语句会被编译器转换为 runtime.block() 函数，永久阻塞
 	if n == 0 {
 		return []*Node{mkcall("block", nil, nil)}
 	}
@@ -119,12 +121,13 @@ func walkselectcases(cases *Nodes) []*Node {
 	// optimization: one-case select: single op.
 	// TODO(rsc): Reenable optimization once order.go can handle it.
 	// golang.org/issue/7672.
+	// 只有一个 channel 操作，实际会被编译器转换为相应 channel 相应的收发操作，其实和实际调用 data := <- ch 并没有什么区别
 	if n == 1 {
 		cas := cases.First()
 		setlineno(cas)
 		l := cas.Ninit.Slice()
 		if cas.Left != nil { // not default:
-			n := cas.Left
+			n := cas.Left // n 表示 case 的 channel 操作
 			l = append(l, n.Ninit.Slice()...)
 			n.Ninit.Set(nil)
 			var ch *Node
@@ -162,6 +165,7 @@ func walkselectcases(cases *Nodes) []*Node {
 			}
 
 			// if ch == nil { block() }; n;
+			// 这一段操作便是转换成 if ch == nil {block()}; n;
 			a := nod(OIF, nil, nil)
 
 			a.Left = nod(OEQ, ch, nodnil())
@@ -204,6 +208,7 @@ func walkselectcases(cases *Nodes) []*Node {
 	}
 
 	// optimization: two-case select but one is default: single non-blocking op.
+	// 两个 case操作，其中一个还是 default
 	if n == 2 && (cases.First().Left == nil || cases.Second().Left == nil) {
 		var cas *Node
 		var dflt *Node
@@ -225,11 +230,13 @@ func walkselectcases(cases *Nodes) []*Node {
 
 		case OSEND:
 			// if selectnbsend(c, v) { body } else { default body }
+			// 转换为 if selectnbsend(c, v){ //... } else { // default body ...}
 			ch := n.Left
 			r.Left = mkcall1(chanfn("selectnbsend", 2, ch.Type), types.Types[TBOOL], &r.Ninit, ch, n.Right)
 
 		case OSELRECV:
 			// if selectnbrecv(&v, c) { body } else { default body }
+			// 转换为 if selectnbrecv(&v, c){ //... } else { // default body ...}
 			r = nod(OIF, nil, nil)
 			r.Ninit.Set(cas.Ninit.Slice())
 			ch := n.Right.Left
@@ -241,6 +248,7 @@ func walkselectcases(cases *Nodes) []*Node {
 
 		case OSELRECV2:
 			// if selectnbrecv2(&v, &received, c) { body } else { default body }
+			// 转换为 if selectnbrecv2(&v, &received, c){ //... } else { // default body ...}
 			r = nod(OIF, nil, nil)
 			r.Ninit.Set(cas.Ninit.Slice())
 			ch := n.Right.Left
@@ -259,10 +267,14 @@ func walkselectcases(cases *Nodes) []*Node {
 		return []*Node{r, nod(OBREAK, nil, nil)}
 	}
 
+	// 后续逻辑便是多 case 的情况了
+
 	var init []*Node
 
 	// generate sel-struct
 	lineno = sellineno
+	// selv scase 数组，scasetype() 返回的便是 scase
+	// selv 和 order 会作为 selectgo 的参数
 	selv := temp(types.NewArray(scasetype(), int64(n)))
 	r := nod(OAS, selv, nil)
 	r = typecheck(r, ctxStmt)
@@ -274,6 +286,7 @@ func walkselectcases(cases *Nodes) []*Node {
 	init = append(init, r)
 
 	// register cases
+	// 第一阶段：遍历 case 生成 scase 对象存放到 selv 中
 	for i, cas := range cases.Slice() {
 		setlineno(cas)
 
@@ -291,6 +304,7 @@ func walkselectcases(cases *Nodes) []*Node {
 		var c, elem *Node
 		var kind int64 = caseDefault
 
+		// cas.Left 如果不为 nil,那么说明是 channel 的收发操作
 		if n := cas.Left; n != nil {
 			init = append(init, n.Ninit.Slice()...)
 
@@ -308,6 +322,7 @@ func walkselectcases(cases *Nodes) []*Node {
 			}
 		}
 
+		// 根据 c, elem 构造 scase，并存放到 selv 中
 		setField := func(f string, val *Node) {
 			r := nod(OAS, nodSym(ODOT, nod(OINDEX, selv, nodintconst(int64(i))), lookup(f)), val)
 			r = typecheck(r, ctxStmt)
@@ -334,8 +349,11 @@ func walkselectcases(cases *Nodes) []*Node {
 
 	// run the select
 	lineno = sellineno
+	// selectgo 会返回的两个值，chosen 表示被选中的 case 的索引，recvOK 表示对于接收操作，是否成功接收
 	chosen := temp(types.Types[TINT])
 	recvOK := temp(types.Types[TBOOL])
+
+	// 第二阶段：chose, recvOK ：= selectgo(selv, order, n)
 	r = nod(OAS2, nil, nil)
 	r.List.Set2(chosen, recvOK)
 	fn := syslook("selectgo")
@@ -348,6 +366,7 @@ func walkselectcases(cases *Nodes) []*Node {
 	init = append(init, nod(OVARKILL, order, nil))
 
 	// dispatch cases
+	// 第三阶段：根据 selectgo 返回的 case 索引生成多个 if 语句
 	for i, cas := range cases.Slice() {
 		setlineno(cas)
 
